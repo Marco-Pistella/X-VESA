@@ -1,0 +1,283 @@
+##############################################################################
+
+	DATA STRUCTURE
+
+	VESA_MODE_PANEL:
+
+	(00h) WORD [00] = Video mode number
+	(02h) WORD [02] = Horizontal resolution
+	(04h) WORD [04] = Vertical resolution
+	(06h) WORD [06] = Video memory Segment
+	(08h) BYTE [08] = Color bit per pixel
+	(09h) BYTE [09] = Memory bit per pixel
+	(0Ah) BYTE [10] = Size of window in Kb
+	(0Bh) BYTE [11] = Granularity in Kb
+	(0Ch) BYTE [12] = Video mode model
+			0 = Text mode
+			3 = Planar
+			4 = Packed pixel
+			6 = Direct color
+	(0Dh) DWORD [13] = Banked VRAM size in KiB
+                           0h -> Not detected
+                           8xxxxxxxh -> Fail to detect (xxxxxxx = Error number)
+	(11h) DWORD [17] = Linear VRAM size in KiB
+                           0h -> Not detected
+                           8xxxxxxxh -> Fail to detect (xxxxxxx = Error number)
+
+	VESA_MODE_1X:
+
+	(00h) WORD [00] = Video mode number
+	(02h) WORD [02] = Horizontal resolution
+	(04h) WORD [04] = Vertical resolution
+	(06h) BYTE [06] = Color bit per pixel
+	(07h) BYTE [07] = Memory model
+			0 = Text mode
+			3 = Planar
+			4 = Packed pixel
+
+	PANEL:
+
+	(00h) WORD [00] = 1st element inversion position (x,y)
+	(02h) BYTE [02] = Inversion length
+	(03h) BYTE [03] = Inversion mask
+	(04h) WORD [04] = Draw function pointer
+	(06h) WORD [06] = Sidebar position (x,y)
+	(08h) WORD [08] = Total items count - 1
+	(0Ah) WORD [10] = Absolute item index
+	(0Ch) BYTE [12] = Relative items count - 1
+	(0Dh) BYTE [13] = Relative item index
+	(0Eh) BYTE [14] = Total sidebar items - 1
+	(0Fh) BYTE [15] = Flags
+		Bit 0 :
+			0 = Display sidebar
+			1 = Hide sidebar
+
+	INPUTS:
+
+	(00h) WORD [00] = Position (x,y)
+	(02h) BYTE [02] = Color
+	(03h) BYTE [03] = Lenght
+	(04h) WORD [04] = Pointer to verify function
+	(06h) WORD [06] = Pointer to choice buffer
+	(08h) WORD [08] = Key pressed
+	(0Ah) WORD [10] = Pointer to temp choice buffer
+	(0Ch) WORD [12] = Pointer to exit key funcion
+	(0Eh) BYTE [14] = Horizontal cursor position from start (x,y)
+
+	ERROR_VESA:
+
+	(00h) DWORD [00] = Timer ticks
+	(04h) DWORD [04] = Offset VRAM
+	(08h) DWORD [08] = Write value
+	(0Ch) DWORD [12] = Read value
+	(11h) BYTE [16] = Pass number
+
+	LINE:
+
+	(00h) WORD [00] = X Position
+	(02h) WORD [02] = Y Position
+	(04h) WORD [04] = Line len
+
+	VBOX:
+
+	(00h) WORD [00] = X Start position
+	(02h) WORD [02] = Y Start position
+	(04h) WORD [04] = X End position
+	(06h) WORD [06] = Y End position
+	
+##############################################################################
+
+	X-VESA FLAGS
+
+	status_flag_0
+
+	Bit 00 :
+		0 -> Number thousands yes
+		1 -> Number thousands no
+	Bit 01 :
+		0 = No CPUID
+		1 = CPUID present
+	Bit 02 :
+		0 = No SSE
+		1 = SSE present
+	Bit 03 :
+		0 = No AVX
+		1 = AVX present
+	Bit 04 :
+		0 = No AVX/512
+		1 = AVX/512 present
+	Bit 05 :
+		0 = real/unreal mode available
+		1 = Virtual8086 on
+	Bit 06 :
+		0 = FPU not present
+		1 = FPU present
+	Bit 07 :
+		0 = Valid total VESA video mode
+		1 = Too VESA video mode
+
+	status_flag_1
+
+	Bit 00 :
+		0 = No PMID via BIOS detect
+		1 = PMID detected
+	Bit 01 :
+		0 = No PMID via Func 0A
+		1 = PMID detected
+	Bit 02 :
+		0 = No EDID read executed
+		1 = EDID routine executed
+	Bit 03 :
+		0 = Valid EDID header
+		1 = Invalid EDID header
+	Bit 04 :
+		0 = Valid EDID checksum
+		1 = Invalid EDID checksum 
+	Bit 05 :
+		0 = Vesa EDID read not supported
+		1 = Vesa EDID read supported
+	Bit 06 :
+		0 = Choice INS disabled
+		1 = Choice INS enabled
+	Bit 07 :
+		0 = Vesa BIOS EDID not supported
+		1 = Vesa BIOS EDID supported with error (no DDC monitor)
+
+	status_flag_2
+
+	Bit 00 :
+		0 = Bancked video mode
+		1 = Linear video mode
+	Bit 01 :
+		0 = Init_X_Vesa not executed
+		1 = Init_x_Vesa executed
+	Bit 02 :
+		0 = Window VESA function via int 10h
+		1 = Window VESA function via pointer
+	Bit 03 :
+		0 = A20 line not enabled
+		1 = A20 line enabled
+	Bit 04 :
+		0 = Valid byte per scan line video mode
+		1 = Try to correct byte per scan line
+	Bit 05 :
+		0 = 80x40 video mode active
+		1 = VESA video mode active
+	Bit 06 :
+		0 = AVX routines on
+		1 = AVX routines off
+	Bit 07 :
+		0 = Set_VESA_Scanline -> AX = Pixel
+		1 = Set_VESA_Scanline -> AX = Bytes
+
+	status_flag_3
+
+	Bit 00 :
+		0 = Init VGA mode 3h
+		1 = Second attempt Init VGA mode 3h
+	Bit 01 :
+		0 = VBE 3 Check max mem VbeInfoBlock.TotalMemory
+		1 = Unlimited check
+	Bit 02 :
+		0 = VESA Window func not return status
+		1 = VESA_Window func return status
+	Bit 03 :
+		0 = Valid VRAM errors
+		1 = Too VRAM errors
+	Bit 04 :
+		0 = VESA write font transparency
+		1 = No VESA write font transparency
+	Bit 05 :
+		0 = No user interrupt
+		1 = Interruped by user
+	Bit 06 :
+		0 = Screenshot possible
+		1 = No screenshot
+	Bit 07 :
+		0 = Font VESA width 8 pixel
+		1 = Font VESA width 9 pixel
+
+	status_flag_4
+
+	Bit 00 :
+		0 = No font table extracted
+		1 = Font table ready at SS:[0]
+	Bit 01 :
+		0 = Foreground direct color
+		1 = background direct color
+	Bit 02 :
+		0 = Interactive Open_VESA_Video_Mode
+		1 = Automatic Open_VESA_Video_Mode
+	Bit 03 :
+		0 = Open_VESA_Video_Mode no filter
+		1 = Open_VESA_Video_Mode filter for IO graphic
+	Bit 04 :
+		0 = Open_VESA_Video_Mode no filter
+		1 = Open_VESA_Video_Mode filter for addressing
+	Bit 05 :
+		0 = Vesa display start not supported
+		1 = Vesa display start supported
+	Bit 06 :
+		0 = VGA retrace non supported
+		1 = VGA retrace supported
+	Bit 07 :
+		0 = VESA retrace not supported
+		1 = VESA retrace supported
+
+	status_flag_5
+
+	Bit 00 :
+		0 = VESA retrace valid or not supported
+		1 = VESA retrace fail status
+	Bit 01 :
+		0 = Standard VESA video mode
+		1 = Virtual size VESA video mode
+	Bit 02 :
+		0 = Mouse non present
+		1 = Mouse present
+	Bit 03 :
+		0 = 6 bit DAC VGA
+		1 = 8 bit DAC
+	Bit 04 :
+		0 = VGA DAC detected
+		1 = Non VGA DAC detected
+	Bit 05 :
+		0 = Alert message [ESC]=Exit
+		1 = Alert message [ESC]=Continue
+	Bit 06 :
+		0 = Original mouse x_res
+		1 = Mouse x_res=x_res/2
+	Bit 07 :
+		0 = Original mouse y_res
+		1 = Mouse y_res=y_res/2
+
+	status_flag_6
+
+	Bit 00 :
+		0 = Fail horizontal VESA display start bound
+		1 = Ok horizontal VESA display start bound
+	Bit 01 :
+		0 = Fail vertical VESA display start bound
+		1 = Ok vertical VESA display start bound
+	Bit 02 :
+		0 = Display start not supported
+		1 = Display start fail
+	Bit 03 :
+	Bit 04 :
+	Bit 05 :
+	Bit 06 :
+	Bit 07 :
+
+##############################################################################
+
+	Memory use:
+
+	32Kb -> Code (CS)
+	64Kb -> Data (DS/ES/GS)
+	64Kb -> Buffer for text mode graphic (10 pages 80x40)
+	64Kb -> Stack (SS)
+	64Kb -> I/O Buffer
+
+	32KB -> (0B800h) Text mode video memory (FS)
+
+##############################################################################
