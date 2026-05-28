@@ -1,0 +1,414 @@
+                            IPEREDID V1.1
+                          by Marco Pistella
+                         mpistella@libero.it
+
+                          TABLE OF CONTENTS
+
+   1.  Introduction
+       1.1.  What IPEREDID is
+       1.2.  Features
+       1.3.  VESA function 4F15h and the multiple monitor problem
+   2.  How to use IPEREDID
+       2.1.  Installation
+       2.2.  Loading an EDID file
+       2.3.  Per-controller commands
+       2.4.  Status display
+       2.5.  Uninstallation
+       2.6.  Command line summary
+   3.  Technical details
+       3.1.  INT 10h hooking
+       3.2.  Function 4F15h interception logic
+       3.3.  EDID file format
+       3.4.  TSR identification and communication
+   4.  System requirements
+   5.  License
+   6.  Where to find the latest version of IPEREDID
+   7.  How to contact the author
+   8.  Notes
+
+
+===========================================================================
+   1. INTRODUCTION
+===========================================================================
+
+   1.1. What IPEREDID is
+
+   IPEREDID is a DOS TSR (Terminate and Stay Resident) that allows
+   synthetic EDID data to be supplied to the system, independently of
+   the physically connected monitor. It was developed as a support
+   tool for X-VESA: the VESA diagnostic program reads EDID data via
+   VESA function 4F15h, which on some hardware configurations may not
+   return valid data or may not support the number of DDC controllers
+   required for testing. IPEREDID solves this problem by intercepting
+   calls to function 4F15h and responding with EDID data loaded by
+   the user, for one or more DDC controllers simultaneously.
+
+   IPEREDID supports up to 8 independent DDC controllers (controllers
+   0-7), each with its own 128-byte EDID file. For each controller
+   the TSR behavior with respect to the physical BIOS and the
+   connected monitor can be configured independently.
+
+
+   1.2. Features
+
+   - Installation as a memory-resident TSR with INT 10h hooking.
+
+   - Support for up to 8 independent DDC controllers, each with a
+     128-byte binary EDID file.
+
+   - Selective interception of VESA function 4F15h: IPEREDID responds
+     to EDID read calls (BL=01h) and capability check calls (BL=00h)
+     only for controllers for which an EDID file has been loaded and
+     override is enabled.
+
+   - Three independent control flags per controller:
+       * Disable BIOS   : disables forwarding of the 4F15h call to
+                          the physical BIOS for that controller (the
+                          BIOS is bypassed for that controller).
+       * Disable Monitor: signals to the caller the absence of a
+                          monitor on that controller (returns error
+                          code 14Fh).
+       * Override       : enables IPEREDID to respond with the loaded
+                          EDID data (active only if an EDID file has
+                          already been loaded on the controller).
+
+   - EDID binary file loading from the command line, with size
+     verification (exactly 128 bytes).
+
+   - Tabular status display for all controllers via the /S option.
+
+   - Uninstallation from memory via the /U option, with safety
+     verification (IPEREDID must be the last handler installed on
+     INT 10h).
+
+
+   1.3. VESA function 4F15h and the multiple monitor problem
+
+   VESA function 4F15h provides access to the EDID (Extended Display
+   Identification Data) of the connected monitor via the DDC bus.
+   The EDID is a 128-byte block containing the technical information
+   of the monitor: manufacturer, maximum supported resolution,
+   synchronization frequencies, input characteristics and timing
+   descriptors.
+
+   On some hardware configurations function 4F15h is unavailable,
+   returns invalid data, or supports fewer DDC controllers than
+   needed for testing. In these cases IPEREDID allows the BIOS
+   response to be replaced or supplemented with known EDID data,
+   loaded from binary files prepared by the user or acquired with
+   other tools.
+
+   X-VESA uses IPEREDID to test its own EDID reading and decoding
+   logic against arbitrary data, independently of the physically
+   present monitor.
+
+
+===========================================================================
+   2. HOW TO USE IPEREDID
+===========================================================================
+
+   2.1. Installation
+
+   To install IPEREDID as a TSR, type at the DOS prompt:
+
+     IPEREDID.COM
+
+   IPEREDID installs itself in memory by hooking the INT 10h vector
+   and displays the message "Installed". If IPEREDID is already
+   installed in memory, an error message is displayed and the program
+   exits without reinstalling.
+
+   After installation IPEREDID remains resident in memory and
+   intercepts all INT 10h calls, responding to 4F15h calls for the
+   controllers for which it is configured. It is not necessary to
+   load EDID files before installation: files can be loaded at any
+   time after the TSR is resident.
+
+
+   2.2. Loading an EDID file
+
+   To load a binary EDID file on a controller:
+
+     IPEREDID.COM <controller> <file>
+
+   controller   DDC controller number (0-7).
+   file         Path of the binary EDID file to load.
+                The file must be exactly 128 bytes.
+
+   Examples:
+
+     IPEREDID.COM 0 MONITOR.BIN
+     IPEREDID.COM 3 C:\EDID\SAMSUNG.BIN
+
+   After loading, IPEREDID automatically enables the Enable flag and
+   the Override flag for the specified controller: subsequent 4F15h
+   BL=01h calls for that controller will receive the data loaded from
+   the file.
+
+   In case of file read error or invalid size (other than 128 bytes),
+   IPEREDID displays an error message and does not modify the
+   controller state.
+
+
+   2.3. Per-controller commands
+
+   For each controller the three control flags can be modified via
+   commands /A, /B and /C:
+
+     IPEREDID.COM <controller> /A   Toggle the Disable BIOS flag
+     IPEREDID.COM <controller> /B   Toggle the Disable Monitor flag
+     IPEREDID.COM <controller> /C   Toggle the Override flag
+
+   Commands toggle the corresponding flag: if the flag is active it
+   is deactivated, and vice versa. The current state after toggling
+   is displayed.
+
+   The /C command (Override) can only be executed on a controller for
+   which an EDID file has already been loaded. If the controller has
+   no EDID file loaded, the command is rejected with a specific
+   message.
+
+   Flag descriptions:
+
+   Disable BIOS (command /A)
+     If active, IPEREDID does not forward the 4F15h call to the
+     physical BIOS for that controller: the call is handled entirely
+     by IPEREDID. If not active and Override is disabled, the call
+     is forwarded to the original BIOS.
+
+   Disable Monitor (command /B)
+     If active, IPEREDID responds to the 4F15h call signaling the
+     absence of a monitor on the controller (return code 14Fh),
+     regardless of whether an EDID file has been loaded.
+
+   Override (command /C)
+     If active (and an EDID file has been loaded), IPEREDID responds
+     to 4F15h BL=01h calls with the user-loaded EDID data. If not
+     active, the call is forwarded to the original BIOS even if an
+     EDID file is present.
+
+
+   2.4. Status display
+
+   To display the status of all controllers:
+
+     IPEREDID.COM /S
+
+   The command displays a table with one row per controller (0-7),
+   with the following columns:
+
+     Controller      DDC controller number (0-7).
+     Load            YES if an EDID file has been loaded on the
+                     controller, NO otherwise.
+     EDID Override   YES if the Override flag is active, NO otherwise.
+     Disable BIOS    YES if the Disable BIOS flag is active.
+     Disable Monitor YES if the Disable Monitor flag is active.
+
+
+   2.5. Uninstallation
+
+   To remove IPEREDID from memory:
+
+     IPEREDID.COM /U
+
+   Uninstallation is possible only if IPEREDID is the last handler
+   installed on INT 10h, meaning no other TSR installed afterward
+   has hooked the same vector. If the condition is not met, the
+   message "Can't uninstall IperEDID" is displayed and the TSR
+   remains in memory.
+
+   If uninstallation succeeds, the INT 10h vector is restored to its
+   original value and the memory occupied by the TSR is freed.
+
+
+   2.6. Command line summary
+
+   Installation:
+     IPEREDID.COM
+
+   EDID file loading:
+     IPEREDID.COM <controller 0..7> <file>
+
+   Per-controller commands:
+     IPEREDID.COM <controller 0..7> /A
+     IPEREDID.COM <controller 0..7> /B
+     IPEREDID.COM <controller 0..7> /C
+
+   Status display:
+     IPEREDID.COM /S
+
+   Uninstallation:
+     IPEREDID.COM /U
+
+
+===========================================================================
+   3. TECHNICAL DETAILS
+===========================================================================
+
+   3.1. INT 10h hooking
+
+   At installation IPEREDID reads the current INT 10h vector from the
+   interrupt vector table (segment 0000h, offset 40h) and saves it
+   internally. The new handler is then installed in its place via DOS
+   function 25h. The address of the new handler is retained internally
+   to allow the safety check during uninstallation.
+
+   The resident handler occupies in memory the code and data up to
+   the install label (excluded), plus a 15-byte margin, terminated
+   via INT 27h (Terminate and Stay Resident).
+
+
+   3.2. Function 4F15h interception logic
+
+   For each INT 10h call the IPEREDID handler checks the AX register.
+   If AX does not correspond to function 4F15h, the call is forwarded
+   to the original handler via a simulated far call (pushf + call far).
+   Otherwise the following logic is applied for the controller
+   indicated by CX:
+
+   BL=00h (Capability check):
+     IPEREDID responds with AX=4Fh and BX=103h, declaring support
+     for 8 DDC controllers (bits 0-7 of BH).
+
+   BL=01h (EDID read):
+     1. If the Disable BIOS flag is active for the controller: the
+        call is intercepted by IPEREDID (not forwarded to the
+        original BIOS).
+     2. If the Disable Monitor flag is active: IPEREDID returns
+        AX=14Fh (function supported but no monitor present).
+     3. If no EDID file is loaded on the controller: the call is
+        forwarded to the original BIOS.
+     4. If the Override flag is not active: the call is forwarded
+        to the original BIOS.
+     5. In all other cases: IPEREDID copies the 128 bytes of the
+        loaded EDID file into the buffer at ES:DI indicated by the
+        caller and returns AX=4Fh.
+
+   BL>01h or CX>=8:
+     The call is forwarded to the original BIOS without modification.
+
+
+   3.3. EDID file format
+
+   The EDID file expected by IPEREDID is a binary file of exactly
+   128 bytes, corresponding to the standard EDID 1.x block. The file
+   can be acquired with any tool capable of reading and saving raw
+   EDID data from the DDC bus, or constructed manually according to
+   the EDID specification.
+
+   IPEREDID does not verify the EDID header or the checksum of the
+   loaded file: content validation is left to the application that
+   reads the EDID via function 4F15h. X-VESA performs complete header
+   and checksum validation internally.
+
+   A file of size other than 128 bytes is rejected with the message
+   "Error 04: Invalid EDID file".
+
+
+   3.4. TSR identification and communication
+
+   IPEREDID uses three proprietary identification codes to allow
+   communication between subsequent instances of the program and the
+   already-resident TSR:
+
+     IPEREDID_ID1 (4F3Eh) + IPEREDID_ID2 (4E24h):
+       Checks for the presence of IPEREDID in memory. If IPEREDID is
+       installed it responds with AX=4Fh.
+
+     IPEREDID_ID1 (4F3Eh) + IPEREDID_ID3 (4E25h):
+       Requests a pointer to the internal data area of the TSR.
+       IPEREDID responds with ES:DI pointing to the start of the
+       internal EDID area, allowing the new instance to directly read
+       and modify the flags and EDID data of the resident TSR.
+
+   These codes are specific to IPEREDID and do not interfere with
+   any standard VESA or VGA function.
+
+
+===========================================================================
+   4. SYSTEM REQUIREMENTS
+===========================================================================
+
+   - MS-DOS version 5.0 or higher
+   - Intel 80386 processor or higher
+   - VESA interface with function 4F15h support in the target
+     application (X-VESA or other)
+   - Sufficient free conventional memory for the resident TSR
+     (less than 2 KB)
+
+
+===========================================================================
+   5. LICENSE
+===========================================================================
+
+   IPEREDID is released under the MIT License.
+
+   Permission is hereby granted to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the software, subject
+   to the conditions of the MIT License included in this distribution.
+
+   The software is provided "as is", without warranty of any kind,
+   express or implied, including but not limited to the warranties of
+   merchantability, fitness for a particular purpose and noninfringement.
+   In no event shall the author be liable for any claim, damages or
+   other liability arising from the use of this software.
+
+   The full text of the MIT License is included in the file LICENSE
+   distributed with IPEREDID.
+
+
+===========================================================================
+   6. WHERE TO FIND THE LATEST VERSION OF IPEREDID
+===========================================================================
+
+The latest version of IPEREDID is now maintained as a stand-alone project
+and is available on GitHub. This separate distribution includes updated
+documentation, MIT licensing, and a clean repository structure.
+
+You can always find the most recent release here:
+
+https://github.com/Marco-Pistella/IPEREDID
+
+IPEREDID continues to be distributed together with X-VESA for convenience,
+but the GitHub repository is the authoritative source for updates, fixes,
+and standalone usage.
+
+
+===========================================================================
+   7. HOW TO CONTACT THE AUTHOR
+===========================================================================
+
+   The author can be contacted directly at: mpistella@libero.it
+
+   Reports of malfunctions and suggestions for future versions are
+   welcome.
+
+
+===========================================================================
+   8. NOTES
+===========================================================================
+
+   IPEREDID was developed as a support tool for X-VESA to allow EDID
+   read testing on hardware that has no physical monitors connected or
+   that has partial implementations of function 4F15h. Its usefulness
+   is however general: it can be used with any DOS application that
+   queries EDID data via VESA function 4F15h.
+
+   The communication mechanism between subsequent instances of the
+   program and the resident TSR via proprietary identification codes
+   on INT 10h allows the IPEREDID configuration to be modified with
+   the TSR already installed, without the need for uninstallation and
+   reinstallation. EDID files can be loaded and flags can be modified
+   at any time during the DOS session, even while X-VESA is running,
+   provided no function querying 4F15h is active at that precise
+   moment.
+
+   Safe uninstallation via /U is possible only if IPEREDID is the
+   most recently installed handler on INT 10h. If other TSRs installed
+   afterward have hooked INT 10h, uninstallation must be performed in
+   reverse installation order, as with any TSR that hooks DOS interrupt
+   vectors.
+
+
+                                                          Marco Pistella
+                                                     mpistella@libero.it

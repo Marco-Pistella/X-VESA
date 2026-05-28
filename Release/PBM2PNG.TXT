@@ -1,0 +1,395 @@
+                            PBM2PNG V1.0
+                          by Marco Pistella
+                         mpistella@libero.it
+
+                          TABLE OF CONTENTS
+
+   1.  Introduction
+       1.1.  What PBM2PNG is
+       1.2.  Features
+       1.3.  The IFF-PBM format and the PNG format
+   2.  How to use PBM2PNG
+       2.1.  Command line syntax
+       2.2.  Compression levels
+       2.3.  Usage examples
+   3.  Technical details
+       3.1.  Reading the IFF-PBM file
+       3.2.  Palette optimization
+       3.3.  PNG color depth selection
+       3.4.  PNG filters
+       3.5.  DEFLATE compression
+   4.  System requirements
+   5.  License
+   6.  Where to find the latest version of PBM2PNG
+   7.  How to contact the author
+   8.  Notes
+
+
+===========================================================================
+   1. INTRODUCTION
+===========================================================================
+
+   1.1. What PBM2PNG is
+
+   PBM2PNG is a command line converter that transforms graphics files
+   in IFF-PBM format into PNG format. It was developed as a support
+   tool for X-VESA: the VESA diagnostic program saves screenshots in
+   IFF-PBM format, a native format from the 1980s not directly
+   readable by most modern PC applications. PBM2PNG fills this gap
+   by producing standard PNG files, compatible with any current
+   viewer, browser or graphics application.
+
+   PBM2PNG is compiled with OpenWatcom C in strict C89 as a Win32
+   command line executable. It can be run directly from the Windows
+   command prompt on both 32 and 64 bit systems, without installing
+   additional software and without dependencies on external libraries.
+
+
+   1.2. Features
+
+   - Reading of IFF-PBM files with BMHD, CMAP and BODY chunks, in
+     big-endian format conforming to the IFF specification.
+
+   - Support for PackBits compression (type 1) and uncompressed files
+     (type 0).
+
+   - Support for palettized images at 8 bits per pixel and true color
+     images at 24 bits per pixel (RGB, 3 bytes per pixel).
+
+   - Automatic conversion from 24 bit to indexed palette: if the
+     24-bit image contains at most 256 distinct colors, PBM2PNG
+     automatically converts it to indexed PNG, significantly reducing
+     the output file size.
+
+   - Automatic PNG color depth selection based on the number of
+     unique colors in the palette: 1 bit (up to 2 colors), 2 bits
+     (up to 4 colors), 4 bits (up to 16 colors), 8 bits (up to 256
+     colors). Pixel packing at 1, 2 and 4 bits is performed
+     internally.
+
+   - Palette ordering optimization for images with at most 16 colors:
+     PBM2PNG reorders the palette to minimize index variations between
+     adjacent pixels, improving the efficiency of PNG filters and
+     subsequent DEFLATE compression. The algorithm uses an adjacency
+     matrix built on horizontally contiguous pixels, a multi-start
+     greedy phase with 32 starting points and a 2-opt optimization
+     phase.
+
+   - Adaptive PNG filter selection for each row: PBM2PNG evaluates
+     all 5 filters defined by the PNG specification (None, Sub, Up,
+     Average, Paeth) and selects the one that minimizes the sum of
+     absolute values of the filtered bytes, with heuristic corrections
+     for indexed images and for rows similar to the previous one.
+
+   - DEFLATE compression with dynamic Huffman coding and three-level
+     lazy matching: PBM2PNG implements its own DEFLATE encoder without
+     external dependencies, with Huffman tables built on the actual
+     symbol frequencies of the current image. The compression level
+     is configurable via the command line.
+
+   - Four selectable compression levels (-c1 / -c2 / -c3 / -c4),
+     controlling the search depth in the LZ77 matcher hash chain.
+
+   - PNG file writing conforming to the specification, with IHDR,
+     PLTE (for indexed images), IDAT and IEND chunks, CRC-32 for
+     each chunk and Adler-32 in the zlib stream.
+
+
+   1.3. The IFF-PBM format and the PNG format
+
+   The IFF (Interchange File Format) was developed by Electronic Arts
+   and Commodore in the 1980s for the Amiga platform. The PBM (Packed
+   BitMap) variant stores palettized or true color images in a chunk
+   structure identified by four bytes: BMHD (header with resolution,
+   color depth and compression type), CMAP (optional RGB palette) and
+   BODY (image data, optionally compressed with PackBits). All
+   multi-byte values are in big-endian format.
+
+   X-VESA uses the IFF-PBM format for its screenshots because its
+   structure is straightforward to generate entirely in assembly
+   language, without dependencies on external libraries, and is
+   compatible with the Amiga viewers of the era for which the program
+   is designed.
+
+   The PNG (Portable Network Graphics) format is the de facto open
+   standard for lossless raster graphics on PC and on the web. It is
+   natively supported by all modern browsers, operating systems and
+   graphics applications, and is therefore the natural format for
+   making X-VESA screenshots accessible to a wide audience.
+
+
+===========================================================================
+   2. HOW TO USE PBM2PNG
+===========================================================================
+
+   2.1. Command line syntax
+
+   PBM2PNG <INPUT.PBM> <OUTPUT.PNG> [option]
+
+   INPUT.PBM    Source file in IFF-PBM format.
+   OUTPUT.PNG   Destination file in PNG format.
+   [option]     Optional compression level (see section 2.2).
+
+   Parameters can be specified in any order. The input file and the
+   output file are identified as the first two arguments that do not
+   begin with the '-' character. If either file is missing, PBM2PNG
+   displays the syntax and exits.
+
+   In case of error reading the input file (file not found,
+   unrecognized format, missing BMHD or BODY chunks, invalid
+   resolution) PBM2PNG exits without producing output.
+
+
+   2.2. Compression levels
+
+   -c1    Search depth 4,096 positions.
+          Fastest compression, larger file size.
+
+   -c2    Search depth 8,192 positions.
+
+   -c3    Search depth 16,384 positions.
+
+   -c4    Search depth 32,768 positions (default).
+          Slowest compression, minimum file size.
+
+   The default level -c4 offers the best compression and is suitable
+   for typical use. Lower levels are useful when converting large
+   numbers of files on slow systems.
+
+   The size difference between -c1 and -c4 is generally small for
+   the typical images generated by X-VESA, which have reduced
+   palettes and repeated geometric patterns.
+
+
+   2.3. Usage examples
+
+   Simple conversion with default compression level:
+
+     PBM2PNG FILE0001.PBM FILE0001.PNG
+
+   Conversion with minimum compression level (maximum speed):
+
+     PBM2PNG FILE0001.PBM FILE0001.PNG -c1
+
+   Conversion with maximum compression level (minimum size):
+
+     PBM2PNG FILE0001.PBM FILE0001.PNG -c4
+
+   Under Windows it is possible to convert all PBM files in the
+   current directory via a batch file:
+
+     FOR %%F IN (*.PBM) DO PBM2PNG %%F %%~nF.PNG
+
+
+===========================================================================
+   3. TECHNICAL DETAILS
+===========================================================================
+
+   3.1. Reading the IFF-PBM file
+
+   PBM2PNG reads the entire file into memory and parses its chunk
+   structure. The presence of the FORM header with type PBM is
+   verified. Chunks are parsed in sequence; unrecognized chunks are
+   ignored. Word padding (alignment byte for odd-size chunks) is
+   handled correctly.
+
+   From the BMHD chunk the following are extracted: horizontal and
+   vertical resolution, color depth (8 or 24 bit), compression type
+   (0 = none, 1 = PackBits).
+
+   PackBits decompression correctly handles IFF row padding (rounding
+   the byte width up to a word boundary): padding bytes are consumed
+   without being transferred to the output buffer, preserving
+   correctness for images with an odd byte width.
+
+   For 24-bit images the IFF row is exactly w * 3 bytes with no
+   additional padding; for 8-bit images the row is rounded up to
+   the next multiple of 2.
+
+
+   3.2. Palette optimization
+
+   For indexed images with at most 16 unique colors, PBM2PNG performs
+   a palette reordering with the goal of minimizing index differences
+   between horizontally adjacent pixels. More similar adjacent indices
+   produce lower-value filtered bytes, improving DEFLATE compression
+   efficiency.
+
+   The algorithm builds a 256x256 adjacency matrix: for each pair of
+   horizontally adjacent pixels in the image, the corresponding
+   counter is incremented. The problem of finding the optimal palette
+   ordering is equivalent to the Travelling Salesman Problem (TSP)
+   on the adjacency graph.
+
+   PBM2PNG solves the TSP via:
+
+   - Selection of 32 starting points, corresponding to the 32 most
+     frequent colors in the image.
+   - For each starting point: construction of a greedy path that at
+     each step selects the unvisited color with the highest number
+     of adjacencies to the current color, penalized by index distance
+     (to favor colors close in the original index).
+   - 2-opt optimization: for each pair of edges in the path, it is
+     evaluated whether reversing the intermediate segment improves
+     the total cost. If so, the reversal is applied.
+   - Selection of the path with the highest score among the 32
+     candidates.
+
+   The reordering does not modify the visual content of the image:
+   pixel indices are remapped consistently with the new palette order.
+
+   For images with more than 16 colors, if the original palette is
+   present in the CMAP chunk, it is used without reordering.
+
+
+   3.3. PNG color depth selection
+
+   PBM2PNG automatically selects the output PNG color depth based on
+   the number of unique colors present in the image:
+
+     Up to   2 colors  ->  1 bit per pixel
+     Up to   4 colors  ->  2 bits per pixel
+     Up to  16 colors  ->  4 bits per pixel
+     Up to 256 colors  ->  8 bits per pixel
+     More than 256     ->  24 bits per pixel (true color, no palette)
+
+   For depths below 8 bits, PBM2PNG performs pixel packing: multiple
+   palette indices are compacted into each byte, with the leftmost
+   pixel in the most significant bits, in conformance with the PNG
+   specification.
+
+   For 24-bit images with at most 256 distinct colors, PBM2PNG
+   automatically builds a palette and converts the image to indexed
+   format before applying the depth selection logic described above.
+
+
+   3.4. PNG filters
+
+   For each row of the image PBM2PNG evaluates the five filters
+   defined by the PNG specification:
+
+     Filter 0 (None)     No transformation.
+     Filter 1 (Sub)      Difference with the pixel to the left.
+     Filter 2 (Up)       Difference with the pixel in the row above.
+     Filter 3 (Average)  Difference with the average of the pixel to
+                         the left and the one above.
+     Filter 4 (Paeth)    Paeth predictor based on three neighboring
+                         pixels.
+
+   For each filter the sum of the absolute values of the resulting
+   bytes is calculated, used as an estimate of the compression cost.
+   Three heuristic corrections are applied:
+
+   - Filter None receives a proportional penalty for 4 or 8-bit
+     indexed images, to compensate for its tendency to be falsely
+     favored by the absolute sum metric.
+   - The filter selected in the previous row receives a 5% bonus,
+     to favor consistency between consecutive rows and reduce the
+     Huffman coding cost of filter types.
+   - Filter Up receives a 10% bonus for rows with low difference
+     from the row above, a condition frequent in images generated
+     by X-VESA.
+
+   The filter with the lowest score after corrections is selected.
+
+
+   3.5. DEFLATE compression
+
+   PBM2PNG implements a complete DEFLATE encoder without dependencies
+   on zlib or any other external compression library. The encoder
+   uses exclusively dynamic blocks (type 2), with Huffman tables
+   built on the actual symbol frequencies present in the current
+   image.
+
+   The LZ77 matcher uses a hash table with chaining for match search.
+   The search depth is controlled by the global_max_chain parameter,
+   configurable via the -c1/-c4 options. The encoder implements
+   three-level lazy matching: after finding a match at the current
+   position, it evaluates whether a match at the next position and,
+   for short matches, also at the position after that, offers a
+   better gain. If so, it emits a literal and advances one position,
+   or two literals and advances two positions, before emitting the
+   best match.
+
+   Huffman table construction guarantees compliance with the
+   Kraft-McMillan constraint with a maximum length of 15 bits, as
+   required by the DEFLATE specification. Canonical coding ensures
+   decompressibility of the stream by any standard zlib decoder.
+
+   The produced stream is a complete zlib stream (CMF/FLG header +
+   DEFLATE data + Adler-32 checksum), directly usable as the content
+   of the PNG IDAT chunk.
+
+
+===========================================================================
+   4. SYSTEM REQUIREMENTS
+===========================================================================
+
+   - Windows 32 or 64 bit (XP or higher)
+   - No additional libraries required
+   - Memory sufficient to hold the entire input PBM file plus
+     processing buffers. For X-VESA screenshots the requirement
+     is less than 8 MB.
+
+
+===========================================================================
+   5. LICENSE
+===========================================================================
+
+   PBM2PNG is freeware. No fee is owed to the author for the use of
+   PBM2PNG. No modification or manipulation of the program is
+   permitted. This document is an integral part of the PBM2PNG
+   distribution and must always accompany the executable. The author
+   disclaims all liability for damages caused by the use of PBM2PNG.
+   Use of the program implies acceptance of this license.
+
+
+===========================================================================
+   6. WHERE TO FIND THE LATEST VERSION OF PBM2PNG
+===========================================================================
+
+   PBM2PNG is distributed as part of the X-VESA archive. The latest
+   version can be found at the same addresses indicated in the X-VESA
+   documentation:
+
+   ftp://ftp.elf.stuba.sk/pub/pc/utildiag/xvesa???.zip
+
+
+===========================================================================
+   7. HOW TO CONTACT THE AUTHOR
+===========================================================================
+
+   The author can be contacted directly at: mpistella@libero.it
+
+   Reports of malfunctions and suggestions for future versions are
+   welcome.
+
+
+===========================================================================
+   8. NOTES
+===========================================================================
+
+   PBM2PNG was developed as a support tool for X-VESA. The IFF-PBM
+   format chosen by X-VESA for its screenshots is optimal for
+   generation in pure assembly language -- simple structure, no
+   library dependencies, PackBits compression implementable in a few
+   dozen instructions -- but is not directly readable by virtually
+   any graphics tool currently in use on PC. PBM2PNG solves this
+   problem by producing standard PNG files with optimized compression,
+   runnable directly from the Windows command prompt without
+   installation.
+
+   The PBM2PNG DEFLATE encoder was written entirely from scratch in
+   C89, without making use of zlib or any other compression library.
+   This choice is motivated by the distribution context: PBM2PNG
+   must be a self-contained and portable executable, free of external
+   dependencies.
+
+   For the typical images produced by X-VESA -- 640x400 screens with
+   256 colors, text graphics and bars -- PBM2PNG produces PNG files
+   significantly smaller than generic converters, thanks to palette
+   optimization and adaptive per-row filter selection.
+
+
+                                                          Marco Pistella
+                                                     mpistella@libero.it

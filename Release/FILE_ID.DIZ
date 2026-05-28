@@ -1,0 +1,8 @@
+X-VESA 2.0 Public RC1
+Advanced VESA BIOS diagnostic tool.
+Enumerates and tests all VESA modes.
+Includes VRAM, timing and DAC checks.
+Virtual resolution and EDID analysis.
+Works on real DOS, 80386 or better.
+Freeware. Do not modify executable.
+Author: Marco Pistella (2026)

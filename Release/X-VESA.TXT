@@ -1,0 +1,1240 @@
+                            X-VESA V2.0.0
+                          by Marco Pistella
+                         mpistella@libero.it
+
+                          TABLE OF CONTENTS
+
+   1.  Introduction
+       1.1.  What X-VESA is
+       1.2.  Features
+       1.3.  The VESA BIOS Extensions
+   2.  How to use X-VESA
+       2.1.  The main screen
+       2.2.  F10 key - Extended VESA interface information
+       2.3.  F9 key  - Monitor EDID read
+       2.4.  F8 key  - System information
+       2.5.  F7 key  - VBE/PM (Power Management) check
+       2.6.  F6 key  - Available VRAM per video mode
+       2.7.  Commands available for the selected video mode
+             2.7.1.  Detailed video mode information
+             2.7.2.  Test VRAM memory access speed
+             2.7.3.  Test VRAM reliability
+             2.7.4.  Detect video scan timings
+             2.7.5.  Test video mode visualization
+             2.7.6.  Test dual page video mode
+             2.7.7.  Test virtual resolution
+             2.7.8.  Test switch DAC 6/8 bit
+             2.7.9.  Detect available video memory
+       2.8.  Execution times
+       2.9.  Screenshot (F2 key)
+   3.  System requirements
+   4.  License
+   5.  Where to find the latest version of X-VESA
+   6.  How to contact the author
+   7.  Contents of the XVESA200.ZIP archive
+   8.  Notes
+
+
+===========================================================================
+   1. INTRODUCTION
+===========================================================================
+
+   1.1. What X-VESA is
+
+   X-VESA is a DOS diagnostic program that performs in-depth analysis
+   and verification of a VESA interface on real hardware. X-VESA
+   enumerates all available VESA video modes, collects and decodes
+   the information returned by the VESA interface for each mode,
+   and performs functional tests and measurements on the hardware
+   resources actually accessible.
+
+   X-VESA supports VBE specifications from version 1.0 to version
+   3.0, including non-standard versions and partial or defective
+   implementations. For graphics cards without native VESA support,
+   a compatible software VESA driver (TSR) must be loaded beforehand.
+
+
+   1.2. Features
+
+   - Enumeration of all available VESA video modes up to a maximum
+     of 256, with their technical information, adapted to the VBE
+     version declared by the interface (1.0 / 1.1 / 1.2 / 2.0 / 3.0).
+     If the interface declares more than 256 modes, the excess modes
+     are discarded and a warning message is presented to the user at
+     the end of initialization.
+
+   - Full support for video memory models:
+       * Text
+       * Planar (1-4 bits per plane)
+       * Packed-pixel (1-8 bits per pixel)
+       * Direct color (9-32 bits per pixel, including 15/16/24/32 bpp)
+
+   - Enumeration of direct color modes declared as packed pixel in
+     VESA interfaces prior to version 1.2.
+
+   - Enumeration of VESA 1.0/1.1 video modes without Optional mode
+     information fields.
+
+   - Support for VRAM access modes:
+       * Banked (paged memory windows)
+       * Linear frame buffer (requires A20 and VESA 2.0 or higher)
+
+   - In banked mode: support for bank switching via INT 10h or via
+     a far pointer directly to the BIOS function.
+
+   - Handling of the most common anomalies in VESA implementations:
+       * Incorrect VBE version
+       * Wrong window segment and size
+       * Resolution not conforming to minimum limits
+       * Invalid bytes per scan line (with correction attempt)
+       * Video mode not correctly initialized by the BIOS
+       * Invalid linear frame buffer address
+       * Bank switching function unavailable or non-functional
+
+   - Validation of the "Mode supported by hardware configuration"
+     flag in ModeAttributes: modes for which the interface declares
+     lack of hardware support are rejected before any opening attempt.
+
+   - Verification of minimum resolution limits, distinct for text
+     and graphic modes. For graphic modes it is also verified that
+     the horizontal resolution is aligned to a multiple of 4;
+     otherwise the mode is rejected.
+
+   - Validation of bits per pixel based on the memory model:
+     planar requires exactly 4 bpp; packed pixel exactly 8 bpp;
+     direct color requires more than 8 total bpp, no more than 8 bpp
+     per channel, and an overall depth not exceeding 32 bpp.
+
+   - Automatic reclassification of direct color modes declared as
+     packed pixel in pre-1.2 VESA interfaces: the effective BPP is
+     derived from the sum of the RGB masks (RedMaskSize +
+     GreenMaskSize + BlueMaskSize), rounded up to the next multiple
+     of 8. The 15 bpp case is normalized to 16 bpp.
+
+   - Reclassification of 4 bpp planar modes in which
+     BytesPerScanLine * 2 = XResolution: X-VESA treats them as
+     packed pixel regardless of the declared memory model.
+
+   - Validation of the banked window with automatic fallback from
+     WinA to WinB. In the absence of valid windows the mode is
+     marked as having no banked access. The window is accepted only
+     if WinSize is non-zero, not exceeding the maximum limit, and
+     WinGranularity is non-zero, not exceeding WinSize, and is an
+     exact divisor of it.
+
+   - Validation of RGB masks for direct color modes: each channel
+     must have a size between 1 and 8 bits; the sum of the three
+     sizes must not exceed the memory footprint; channels must not
+     overlap (bitwise check with accumulator). A failure invalidates
+     the mode. For pre-1.2 interfaces that declare direct color modes
+     as packed pixel, X-VESA substitutes the masks with an internal
+     default table for 15, 16, 24 and 32 bpp formats.
+
+   - Automatic correction of BytesPerScanLine when the value declared
+     by the interface is less than the minimum calculated based on the
+     memory model and resolution. The corrected value is aligned to
+     the next multiple of 4. For linear modes on VESA 3.0,
+     LinBytesPerScanLine is checked first; on error it falls back to
+     BytesPerScanLine.
+
+   - Verification of correct video mode initialization after the
+     4F02h call: X-VESA compares a subset of VGA registers
+     (Miscellaneous, Sequencer, CRTC 0-7) with the expected values
+     for the internal 80x40 mode. If the registers are unchanged,
+     the BIOS has not actually switched the mode; in interactive mode
+     the user can choose to retry, in automatic mode the mode is
+     marked as unopenable.
+
+   - Validation of the banked window segment with interactive
+     correction: the segment is compared to the expected value
+     (0xA000 graphic, 0xB800 color text, 0xB000 mono text). In case
+     of discrepancy, in interactive mode a confirmation request is
+     presented before forcing the standard segment; in automatic mode
+     the substitution occurs without interaction. If both WinA and
+     WinB are accessible for read/write, their segments must match;
+     otherwise the mode is rejected.
+
+   - Error code recording (up to 22 distinct codes) for each video
+     mode with the ability to consult them.
+
+   - Detection and handling of the well-known divide-by-zero bug
+     found in several 1990s VESA BIOS implementations, for example
+     in 3dfx implementations, for virtual resolutions exceeding 8 MB
+     of VRAM.
+
+   - VRAM read and write benchmark with accesses from 8 to 512 bits:
+       *   8 bit  : always available
+       *  16 bit  : always available
+       *  32 bit  : always available
+       *  64 bit  : requires FPU
+       * 128 bit  : requires SSE
+       * 256 bit  : requires AVX
+       * 512 bit  : requires AVX-512F
+     For each mode the measurement function overhead is calculated
+     and subtracted, expressed in PIT cycles and as a percentage.
+     Results are presented graphically both with and without overhead.
+
+   - VRAM reliability test with three distinct patterns, configurable
+     start address and memory size, selectable number of passes.
+     Real-time monitoring interface with elapsed time, estimated time
+     to completion, progress percentage, current address and current
+     pass. Final report with navigable error table and save option.
+
+   - Analysis of the current video mode timings: vertical frequency,
+     horizontal frequency, bandwidth, interlaced mode detection.
+     Statistical analysis of horizontal retrace samples with
+     calculation of the sigma/mu parameter (jitter). Graphical
+     display of sample distribution with zoom (10%-400%) and scroll
+     functions.
+
+   - Video mode visualization test.
+
+   - Dual-page test with vertical retrace synchronization, with
+     selection among three modes: OFF, VGA, VESA.
+
+   - Virtual resolution test: creation of a virtual page with
+     configurable search range, keyboard and mouse navigation.
+     Automatic verification of alignment granularity and upper limit
+     of the 4F07h function on both axes, with summary panel on exit.
+
+   - DAC test: verification of the 6 to 8 bit DAC switch on
+     palettized video modes, with graphical display of four gradients
+     (red, green, blue, grey) and interactive toggle. DAC type
+     detection is performed via direct probe on the PEL mask register
+     (3C6h) immediately after opening the video mode, regardless of
+     the declared VESA version. The sequence writes patterns 55h and
+     AAh and verifies the readback. If the DAC does not respond
+     correctly to direct I/O access, X-VESA automatically selects
+     the path via VBE function 4F09h.
+
+   - Calculation of accessible VRAM for each video mode via direct
+     physical probe on the hardware. The measurement does not rely
+     on information declared by the VESA interface but verifies the
+     amount of memory actually readable and writable. Automatic scan
+     of all available video modes.
+
+   - Complete EDID read and decode of the connected monitor. Support
+     for up to 8 DDC controllers. Automatic deduplication of
+     identical EDID data. Header and checksum validation. Decoding
+     of all documented descriptors. Navigation and saving of
+     extension blocks. Raw binary display. EDID file save.
+
+   - VBE/PM (Power Management) check: reading of declared capabilities
+     and interactive activation of supported power states.
+
+   - Detection of system hardware capabilities: CPU mode (real,
+     Unreal, Virtual 8086), FPU presence, A20 line status, CPUID,
+     SSE, AVX, AVX-512.
+
+   - Screenshot in compressed IFF-PBM format available at any point
+     in the program via the F2 key.
+
+
+   1.3. The VESA BIOS Extensions
+
+   The VBE (VESA BIOS Extension) define a set of extensions to the
+   VGA ROM BIOS services, accessible under DOS via interrupt 10h.
+   The standard provides a hardware-independent interface for access
+   to graphics card features, including manufacturer information,
+   enumeration of available video modes and control of video
+   resources. The VBE specifications were developed with the goal of
+   maintaining backward compatibility.
+
+
+===========================================================================
+   2. HOW TO USE X-VESA
+===========================================================================
+
+   2.1. The main screen
+
+   Launch X-VESA by typing X-VESA.COM at the DOS prompt. The main
+   screen displays the list of all VESA video modes enumerated by the
+   interface, with basic information for each: mode number, resolution,
+   color depth and related video memory footprint (for direct color
+   modes only), graphics/text type, video memory segment, window size
+   and granularity.
+
+   The upper part of the screen shows general information about the
+   VESA interface: VBE version, OEM string, declared total memory
+   (for VESA 1.x with verification and possible visual error
+   indication), number of enumerated video modes.
+
+   X-VESA uses a non-standard video mode (80x40 text, 8x10 pixel
+   font) of 640x400 pixels for the entire text interface.
+   Compatibility with VGA hardware is nearly 100%.
+
+   Keys available on the main screen:
+
+     UP / DOWN     Navigation in the mode list
+     PGUP / PGDN   Navigation one page at a time
+     HOME / END    Navigation to beginning and end of list
+     ENTER         Opens the command menu for the selected mode
+     F10           Extended VESA interface information
+     F9            EDID read of the connected monitor
+     F8            System and CPU extension information
+     F7            VBE/PM (Power Management) check
+     F6            Available VRAM per video mode
+     F2            Screenshot of the current screen
+     ESC           Exits X-VESA
+
+   In the command menu for the selected video mode the following
+   additional options are available:
+
+     F10           Enables / disables Linear frame buffer mode
+     F9            In banked mode: selects bank switching via
+                   INT 10h or via far pointer
+     F8            Enables / disables AVX / AVX-512F support
+                   Warning: on some systems Legacy USB support
+                   generates a conflict with AVX that causes an
+                   unrecoverable crash. If in doubt, keep disabled.
+
+
+   2.2. F10 key - Extended VESA interface information
+
+   Displays detailed information returned by the VbeInfoBlock.
+   Content varies depending on the declared VBE version:
+
+   All versions:
+     - General interface capabilities (DAC width, VGA compatibility,
+       RAMDAC snow effect support)
+     - VGA ROM size expressed in bytes
+
+   VESA 2.0 and higher:
+     - OEM software version
+     - OEM strings: vendor, product, product revision
+     - Stereo signaling support and related capabilities
+
+   VESA 3.0:
+     - Additional VbeInfoBlock fields specific to version 3.0
+
+   PMID (Protected Mode Interface Descriptor) structure:
+     - Detected via two independent methods: direct BIOS detection
+       and VBE function 4F0Ah
+     - If detected by at least one method: far address and complete
+       contents of the PMID structure
+
+   Video BIOS dump (S key):
+     - Saves the complete Video BIOS ROM to disk in binary format
+     - Source: segment C000h, size determined by the ROM header
+       field at offset 02h (number of 512-byte blocks)
+     - File name (FILEXXXX.VBI) is generated automatically with
+       a numeric suffix to avoid overwriting existing files
+       (up to 9999 files)
+
+
+   2.3. F9 key - Monitor EDID read
+
+   Queries the VESA interface via function 4F15h to read the EDID
+   data of the connected monitor. Up to 8 DDC controllers are queried
+   in sequence. Identical EDID data detected on multiple controllers
+   is automatically deduplicated.
+
+   If multiple monitors with distinct EDID data are present, a
+   selection list is displayed. Data is read only once and kept in
+   memory for subsequent accesses.
+
+   For each EDID the standard header and checksum are verified. In
+   case of invalid header or checksum, X-VESA reports it and offers
+   the option to display the data or the raw binary representation
+   anyway.
+
+   The display is organized in navigable pages:
+
+     LEFT / RIGHT   Scroll between pages
+     HOME / END     First / last page
+     E              Navigation and display of extension blocks
+     B              Raw binary display of the 128-byte block
+     S              EDID file save
+     F1             Context-sensitive help
+     ESC            Exit
+
+   The decoding is organized in the following 9 pages:
+
+   Page 1 - General structure: raw byte sequence of the EDID header
+   in hexadecimal, specification version and revision (with
+   notification if outside the standard range), checksum, number of
+   extension blocks present, checksum and header validation status.
+
+   Page 2 - Display identification: 3-letter manufacturer code
+   decoded from the 2-byte compressed ID, Product ID and Serial
+   Number in hexadecimal, manufacturing year (offset 1990),
+   manufacturing week with notification if the value exceeds 54.
+
+   Page 3 - Video input parameters and physical dimensions. For
+   analog signal: signal levels, synchronization type, composite
+   sync, sync-on-green, serration. For digital signal: color depth,
+   interface type (HDMI, DisplayPort and others). Physical dimensions
+   or aspect ratio based on the MaxHSize/MaxVSize fields: dimensions
+   in cm if both are non-zero, landscape or portrait aspect ratio if
+   only one is non-zero. Features byte: supported power states,
+   display type, sRGB default.
+
+   Page 4 - Display gamma value (field / 100, or unspecified if
+   0FFh). Chromaticity coordinates for the three RGB primaries and
+   the white point, expressed as 4-digit decimal fractions (10-bit
+   precision derived from ChromaData fields).
+
+   Page 5 - Established timings: 24 predefined modes decoded bit by
+   bit from the 3 EstTimings bytes. Standard timings: up to 8 entries
+   of 2 bytes each, decoded as horizontal resolution and refresh
+   frequency.
+
+   Page 6 - Detailed timing descriptors (up to 4, 18 bytes each):
+   pixel clock, active horizontal and vertical resolution, blanking,
+   sync offset and sync width with high bits extracted from byte 11,
+   physical image dimensions, border, interlaced/stereo/sync type and
+   polarity attributes.
+
+   Page 7 - Text descriptors: alphanumeric string (tag 0FEh), monitor
+   name (0FCh), serial number (0FFh), vertical and horizontal
+   frequency limits with maximum pixel clock (0FDh). If present, the
+   secondary GTF curve with its parameters and the CVT structure with
+   version, maximum width, supported aspect ratios, preferred refresh
+   rate and scaling support are decoded.
+
+   Page 8 - Additional descriptors: color point data (0FBh, up to 2
+   entries with chromaticity coordinates and gamma); additional
+   standard timings (0F9h, 6 entries decoded as resolution and
+   refresh); additional timing identifiers (0FAh, 6 entries in
+   hexadecimal).
+
+   Page 9 - CVT 3-byte timing codes (0F8h): up to 4 entries with
+   vertical resolution, aspect ratio, preferred refresh rate and
+   supported refresh frequencies. Established Timings III (0F7h):
+   VESA bitmap of additional standardized modes, decoded on a
+   bit-by-bit basis.
+
+
+   2.4. F8 key - System information
+
+   Displays information about the hardware capabilities detected by
+   X-VESA at startup. Detection is performed directly without relying
+   on the DOS environment or system drivers.
+
+   Information displayed:
+
+     Virtual 8086     Indicates whether the CPU is operating in
+                      Virtual 8086 mode. In this case features
+                      requiring direct access to control registers
+                      (AVX, AVX-512, Unreal Mode) are not available.
+
+     FPU              Presence of the math coprocessor. Detected via
+                      CPUID if available, otherwise via direct FPU
+                      initialization (fninit/fnstsw).
+
+     A20              Status of the A20 line. Required for linear
+                      frame buffer access and for AVX routines.
+
+     CPUID            Availability of the CPUID instruction, detected
+                      via the ID bit of the EFLAGS register.
+
+     SSE              SSE support. CR0 and CR4 registers are
+                      configured directly by X-VESA.
+
+     AVX              AVX support. Verified via CPUID leaf 1 and
+                      confirmed via xsetbv/xgetbv on XCR0.
+
+     AVX-512F         AVX-512F support. Verified via CPUID leaf 7,
+                      XSAVE area size and confirmation via
+                      xsetbv/xgetbv on XCR0.
+
+   Unreal Mode is entered by X-VESA not only for linear modes, but
+   also for banked modes when the A20 line is enabled and AVX or
+   AVX-512 support is present. The transition uses LGDT followed by
+   toggling bit 0 of CR0 with pipeline flush (jmp $+2), and return
+   to real mode via far retf. DS and ES selectors are restored via GS
+   at the end of the sequence.
+
+   For AVX and AVX-512F routines, the transition to Unreal Mode is
+   preceded by an intermediate pass through 16-bit Protected Mode
+   (PM/16). The PM/16 pass is required to execute xsetbv on XCR0
+   with the correct privilege levels; the cli instruction is
+   mandatory before xsetbv, since on three out of forty-five tested
+   systems Legacy USB handling (SMI) caused corruption of the YMM
+   register state during the AVX-512F activation sequence in Unreal
+   Mode + PM/16 environment. The return to real mode occurs via the
+   same far retf sequence used for standard Unreal Mode; selectors
+   are restored via GS before returning to the caller.
+
+
+   2.5. F7 key - VBE/PM (Power Management) check
+
+   Queries the VESA interface via function 4F10h to detect declared
+   power management capabilities. The following are displayed:
+
+     - VBE/PM version
+     - Supported power states (up to 4: standby, suspend, off, on)
+
+   Pressing F10 displays the power state activation panel. Keys 1/2/3/4
+   activate the corresponding state: the monitor is brought to the
+   requested state, X-VESA waits for a keypress and restores normal
+   operation.
+
+   Only states actually supported by the VESA interface are shown. If
+   function 4F10h is supported but no state is available, a specific
+   message is displayed.
+
+
+   2.6. F6 key - Available VRAM per video mode
+
+   Displays the list of video modes with the amount of accessible
+   VRAM for each, if already measured. Values not yet detected are
+   explicitly indicated. Modes for which an error occurred during
+   opening show the corresponding error code instead of the VRAM size.
+
+   Pressing F5 starts the automatic scan of all graphic video modes
+   (planar, packed pixel, direct color). For each mode the physical
+   VRAM probe is executed in both banked and linear mode, if
+   available. The scan may take significant time and cause monitor
+   flashing. A confirmation request is presented before starting
+   the scan.
+
+   Detected values are retained for the entire session and are
+   available for all subsequent commands without repeating the
+   measurement.
+
+   For a description of the measurement method see section 2.7.9.
+
+
+   2.7. Commands available for the selected video mode
+
+   Pressing ENTER on the main screen opens the command menu for the
+   selected video mode. Available commands depend on the
+   characteristics of the video mode.
+
+
+   2.7.1. Detailed video mode information
+
+   Displays all available technical information for the selected
+   video mode, decoded according to the VBE version declared by the
+   interface (1.0 / 1.1 / 1.2 / 2.0 / 3.0):
+
+     - Mode number, resolution, color depth
+     - Memory model (text / planar / packed / direct color)
+     - Mode attributes (hardware support, TTY, color, graphics,
+       linear frame buffer, double scan, interlace, triple buffer,
+       stereo, dual display start)
+     - Banked window size and granularity
+     - Segment of windows A and B, access attributes
+     - Bytes per scan line (with indication of any correction)
+     - Linear frame buffer address
+     - RGB masks for direct color modes
+     - Additional information specific to VESA 3.0
+
+   For VESA 2.0 and higher modes: off-screen memory offset and size,
+   if declared by the interface. For VESA 3.0 modes: maximum supported
+   pixel clock, with explicit notification if the value exceeds
+   999,999,999 Hz. The number of video pages (NumberOfImagePages) is
+   displayed as the declared value plus one, in accordance with the
+   VESA convention. For modes without extended information (bit 1 of
+   ModeAttributes not set), fields not provided by the interface are
+   explicitly indicated as not available.
+
+   The command is available for all video modes enumerated by X-VESA.
+
+
+   2.7.2. Test VRAM memory access speed
+
+   Measures the VRAM access speed in read and write with the
+   following modes:
+
+       8 bit   16 bit   32 bit   64 bit   128 bit  256 bit  512 bit
+
+   Availability of modes above 32 bit depends on hardware: 64 bit
+   requires FPU, 128 bit SSE, 256 bit AVX, 512 bit AVX-512F.
+
+   For each mode the measurement function overhead is calculated via
+   32 preliminary measurements. Results are presented graphically in
+   two forms: with overhead included and with overhead subtracted.
+   The overhead is expressed in PIT cycles and as a percentage of
+   total time.
+
+   Results are organized in pages navigable via LEFT/RIGHT/HOME/END
+   keys. Speed values are expressed in KiB/s or MiB/s depending on
+   the order of magnitude, with a measurement range up to 1 TiB/s.
+   For each mode a bar proportional to the maximum value detected
+   among all available modes is shown. When AVX or AVX-512 are
+   available but disabled by the user via F8, the corresponding
+   result is replaced by an explanatory message.
+
+   Pressing F2 allows saving a screenshot of the results.
+
+   The command is available for packed video modes at 1, 2, 4 or
+   8 bpp, or direct color.
+
+
+   2.7.3. Test VRAM reliability
+
+   Verifies VRAM integrity with three distinct test patterns. Before
+   starting the test it is possible to configure:
+
+     - Start address
+     - Amount of VRAM to test
+     - Number of passes
+
+   If VRAM has not been measured yet, measurement is performed
+   automatically before configuration.
+
+   The three patterns applied in sequence on each 1 KB block are:
+
+     BITS_TEST    Cell-by-cell write and immediate verify with a
+                  sequence of distinct patterns, repeated for every
+                  DWORD of the block.
+     BURST_TEST   Write of a uniform pattern over the entire block,
+                  forced flush of the CPU write buffers via I/O
+                  access to port 80h, then verify of the entire block.
+     MATRIX_TEST  A sliding bit pattern: a single bit is written and
+                  verified, then shifted left until the bit shifts
+                  out of range, for every DWORD of the block.
+
+   During the test an always-visible interface shows:
+     - Elapsed time
+     - Estimated time to completion (not available if exceeding
+       99 hours and 59 minutes)
+     - Progress percentage
+     - Current test address
+     - Current pass number
+
+   The test can be interrupted at any time by pressing ESC; key
+   detection is performed directly on the BIOS keyboard buffer area.
+   At the end of the test a complete report is displayed. In the
+   presence of errors a navigable table is available with the
+   following information for each error: PIT tick timestamp, absolute
+   VRAM offset, written value, read value, pass number, test type.
+   The maximum number of recordable errors is 999; upon reaching the
+   limit the test is interrupted with a specific warning.
+
+   Pressing S allows saving the complete report to file. The file
+   includes a header with video mode, access mode, start address,
+   tested amount, number of passes, error count, date and time in
+   the local DOS system format (European dd/mm/yyyy, American
+   mm/dd/yyyy, Japanese yyyy/mm/dd; 12h or 24h time with local
+   separators), followed by the complete error table.
+
+   The command is available for 8 bpp packed or direct color video
+   modes.
+
+
+   2.7.4. Detect video scan timings
+
+   Analyzes the timing parameters of the current video mode:
+
+     - Vertical frequency (Hz)
+     - Horizontal frequency (kHz)
+     - Bandwidth (MHz)
+     - Interlaced mode (yes/no)
+
+   For text modes and modes with active double scan, all calculations
+   use the actual number of scan lines, derived by multiplying the
+   vertical resolution expressed in characters by the font height
+   (read from the CRTC register) and doubling the result in the
+   presence of double scan.
+
+   The horizontal frequency is measured via statistical sampling of
+   the retrace. The minimum validity threshold for each sample is
+   calculated dynamically based on the effective vertical resolution.
+   During sample collection a LED KITT animation is performed on the
+   keyboard status LEDs. Samples below the threshold are counted
+   separately; if their count exceeds twice the expected total the
+   measurement is abandoned, otherwise the count is shown alongside
+   the number of valid samples.
+
+   Bandwidth is calculated as the product of the total number of
+   pixels per line (active resolution plus blanking, derived from
+   CRTC and Sequencer registers) and the horizontal frequency. If
+   the resulting value is not geometrically plausible with the
+   declared resolution, detection of indirect VGA emulation is
+   reported in place of the bandwidth.
+
+   Interlace detection is based on the ratio between horizontal and
+   vertical frequency compared with the number of active scan lines;
+   vertical frequencies below 50 Hz are automatically classified as
+   interlaced.
+
+   The sigma/mu parameter (relative jitter) and the number of valid
+   samples over the total acquired are displayed.
+
+   Pressing D displays the graphical distribution of samples on a
+   74x30 character chart with 148x60 element resolution. The screen
+   shows the average sample value in PIT ticks, minimum and maximum
+   values, number of distinct values and frequency of the most
+   recurrent value. On the last row of the chart, standard glyphs
+   are replaced by custom VGA characters that encode the overflow
+   information for both adjacent columns. The following functions
+   are available:
+
+     +/-              Zoom 10%-400% in 10% steps
+     LEFT/RIGHT       Scroll by 1 unit
+     CTRL+LEFT/RIGHT  Scroll by 10 units
+     DEL              Reset zoom and scroll
+     F1               Context-sensitive help
+
+   The command is available for every video mode enumerated by
+   X-VESA.
+
+
+   2.7.5. Test video mode visualization
+
+   Opens the selected video mode and displays a verification screen
+   with the main mode information: resolution, memory model, access
+   mode, VRAM size. Allows verification of correct mode initialization
+   by the VESA BIOS.
+
+   Screen content depends on the video mode memory model:
+
+   - Text modes: a perimeter frame is drawn via direct write to VRAM
+     at segment B800h/B000h, using IBM frame characters. The interior
+     contains a 16x16 matrix of attribute-character pairs with
+     incremental value, producing a display of all 256 foreground /
+     background color combinations of the VGA text palette.
+
+   - Planar modes (4 bpp): 16 filled rectangles are drawn arranged
+     vertically, each colored with one of the 16 VGA palette indices
+     from 0 to 15.
+
+   - Packed pixel modes (8 bpp): a 16x16 grid of filled rectangles
+     is drawn covering all 256 available palette indices, distributed
+     over 16 columns and 16 rows.
+
+   - Direct color modes: a two-dimensional gradient is rendered over
+     the entire display area. The horizontal axis simultaneously
+     modulates the red channel (increasing from 00h to FFh) and the
+     blue channel (decreasing from FFh to 00h); the vertical axis
+     modulates the green channel (increasing from 00h to FFh). The
+     value distribution on both axes is calculated via integer
+     division with remainder accumulation, guaranteeing uniformity
+     regardless of the mode resolution. The horizontal component
+     values are precalculated into a temporary buffer; the vertical
+     component is combined row by row at write time. The routine
+     handles separately the 16 bpp (2 bytes per pixel), 24 bpp (3
+     bytes per pixel) and 32 bpp (4 bytes per pixel) formats, both
+     in banked mode -- with automatic bank switching handling during
+     write -- and in linear frame buffer mode.
+
+   In all graphic modes the mode information panel and exit prompt
+   are displayed at the bottom. The F2 key is available to capture
+   a screenshot; any other key closes the video mode and restores
+   the main screen.
+
+   The command is available in text, 4 bpp planar, 8 bpp packed and
+   direct color modes.
+
+
+   2.7.6. Test dual page video mode
+
+   Opens the selected video mode and tests dual-page mode with
+   vertical retrace synchronization, to eliminate flickering during
+   screen updates. The command is available exclusively for graphic
+   modes (planar, packed pixel, direct color); text modes are
+   rejected with a specific message.
+
+   Before starting the test, X-VESA verifies that the available VRAM
+   is sufficient to hold at least two complete video pages. For
+   planar modes the calculation accounts for the four memory planes.
+   If VRAM is insufficient, X-VESA automatically attempts to reduce
+   the BytesPerScanLine value via function 4F06h, bringing it to the
+   minimum compatible with the declared horizontal resolution; if
+   memory is still insufficient after reduction, the command is
+   aborted with a warning message.
+
+   During initialization, X-VESA performs an automatic probe sequence
+   to determine which synchronization modes are actually available on
+   the hardware:
+
+   - VESA display start availability: the 4F07h BL=00h call is
+     executed with vertical offset of the second page start, followed
+     by a verification read via BL=01h. VESA display start is
+     considered functional only if the read returns CX=0 and DX=the
+     expected value; the offset is then reset to 0,0.
+
+   - VGA retrace availability: the input status register 3DAh/3BAh
+     is sampled for approximately 2 BIOS ticks. VGA retrace is
+     confirmed if bit 3 changes state during the interval.
+
+   - VESA retrace availability: the 4F07h BL=80h call (synchronous
+     retrace wait) is executed, followed by a verification read with
+     BL=01h. Immediately after the function returns, a single read
+     of register 3DAh is performed (if VGA retrace is available): if
+     bit 3 is 0, the function returned control before the actual
+     start of retrace -- behavior characteristic of the bug present
+     in Nvidia cards, which inverts the wait logic. In this case an
+     appropriate flag is set and VESA retrace mode is marked as
+     unreliable.
+
+   The synchronization type is selectable via F10, which cycles
+   through the three available modes automatically skipping those
+   not supported by the current hardware:
+
+     OFF    No synchronization; flip occurs immediately.
+     VGA    Wait for vertical retrace via polling of register
+            3DAh bit 3.
+     VESA   Wait via function 4F07h BL=80h.
+
+   The active mode is indicated by a graphical indicator positioned
+   in the information panel, updated at each F10 toggle. If VESA
+   retrace is selected but the appropriate flag is set, the indicator
+   shows FAIL instead of the normal active status.
+
+   The default selection at test startup favors the most accurate
+   synchronization mode available: VESA if functional, VGA otherwise,
+   OFF if neither is available.
+
+   The screen shows an animation with a horizontal line traversing
+   both pages alternately. The line is drawn at full width (from X=1
+   to X=X_RES - 2, leaving unchanged the pixels at the border of the
+   outer frame); when its vertical position intersects the central
+   information panel, it is drawn in two separate segments that
+   preserve the panel contents. The flip between the two pages is
+   performed via function 4F07h immediately after synchronization;
+   the page selection bit is maintained in the upper 16 bits of EBP
+   via rol ebp,10h.
+
+   X-VESA detects and handles the bug present in Nvidia cards in
+   which function 4F07h BL=80h inverts the retrace wait logic (waits
+   for the end instead of the start), causing flickering. In this
+   case X-VESA automatically selects VGA mode.
+
+   The ESC key closes the video mode and restores the main screen.
+
+
+   2.7.7. Test virtual resolution
+
+   Creates a virtual page with a horizontal size larger than the
+   physical monitor resolution. The command is available exclusively
+   for graphic modes (planar, packed pixel, direct color). Before
+   starting the test, X-VESA verifies the functionality of the
+   4F07h BL=00h call via SET with Y offset=1, verification read with
+   BL=01h and reset to 0,0; if the function is not operational the
+   command is aborted.
+
+   Before starting the construction of the compatible virtual
+   resolution table, X-VESA presents a search range selection menu.
+   Four options are available:
+
+     Legacy (4095x4095)
+       Reduced range, compatible with VESA 1.2 implementations that
+       exhibit anomalies or crashes of the 4F06h function at high
+       values.
+
+     Standard (16383x32767)
+       Default range, conforming to the nominal limits of the VESA
+       specification. The vertical limit of 32767 pixels corresponds
+       to the signed field of function 4F07h.
+
+     Insane (65535x65535)
+       Extended range with no limits. May require significantly longer
+       processing times and cause crashes on hardware with defective
+       VESA implementations. An explicit confirmation request is
+       presented before proceeding.
+
+     Custom
+       Allows manual specification of the four range parameters:
+       minimum and maximum value for the horizontal size, minimum and
+       maximum value for the vertical size. Minimum values cannot be
+       less than the physical resolution of the mode; maximum values
+       cannot be less than the corresponding minimums nor greater than
+       65535. Custom mode allows isolation of specific ranges to bypass
+       known bugs: for example, on some 3DFX and Cirrus Logic cards
+       function 4F06h in direct color mode generates an INT0 exception
+       for widths exactly equal to the horizontal resolution; in this
+       case it is sufficient to set the horizontal minimum equal to
+       the horizontal resolution + 1 or the next valid value to avoid
+       the crash.
+
+   Pressing ESC at any point in the menu or input fields aborts the
+   command without opening the video mode.
+
+   During table construction, X-VESA periodically updates the
+   graphic VRAM contents with an alternating visual pattern. The
+   pattern value is updated via left rotation by 1 bit on the
+   previous value, producing a cyclic sequence of 32 distinct
+   patterns; the first non-zero value of the sequence is initialized
+   to 1h. This visual signal confirms that the program is operational
+   and has not stalled waiting for a response from the VESA BIOS, a
+   condition that may occur on some defective implementations for
+   high scanline values.
+
+   The horizontal size of the virtual page can be specified via a
+   text input field with full editing. The field operates on a double
+   buffer: changes are accumulated in a temporary buffer and
+   transferred to the active buffer only after passing validation;
+   in case of error the field is reset to the last valid value and
+   an audible signal is emitted. The cursor position is managed
+   independently on the two buffers and synchronized at each commit.
+
+   Keys available in the input field:
+
+     LEFT / RIGHT    Move cursor one character
+     HOME / END      Beginning / end of entered text
+     BACKSPACE       Delete character to the left of cursor
+     DEL             Delete character under cursor
+     INS             Toggle between insert and overwrite mode;
+                     active mode is indicated by cursor shape
+                     (underscore in insert, full block in overwrite)
+     ENTER           Confirm value; if field is empty an audible
+                     signal is emitted without exiting
+     ESC             Abandon input without modifying current value
+     F1              Context-sensitive help
+
+   Pressing F10 opens the table of virtual resolutions compatible
+   with the available VRAM, navigable via cursor keys. The table is
+   built by iterating values in the selected range: for each value
+   the 4F06h call is attempted and the readback verified via BL=01h.
+   Accepted values are filtered based on available VRAM: only those
+   for which BytesPerScanLine x bpp x vertical resolution does not
+   exceed the measured VRAM are retained. The resulting maximum
+   vertical resolution is capped to the maximum vertical value of
+   the selected range. Duplicate values (same byte width already
+   present in the table) are discarded. The table is limited to
+   14,336 entries; if the limit is reached a warning is issued and
+   construction stops. For planar modes the VRAM calculation accounts
+   for the four planes by multiplying the product by 4. Selecting
+   an entry via ENTER transfers the value directly to the input field
+   and starts the test; ESC restores the input field without changes.
+
+   If the value entered by the user does not exactly match any table
+   entry, X-VESA locates the nearest value in the table via binary
+   search and presents the user with an explicit confirmation request
+   before proceeding, showing the requested value and the one
+   actually settable.
+
+   After opening the video mode and setting BytesPerScanLine, VRAM
+   is cleared and the characterization of function 4F07h BL=00h on
+   the current hardware is performed. Characterization is structured
+   in two distinct probes, executed separately for the horizontal
+   and vertical axes.
+
+   The first probe determines the minimum alignment granularity of
+   the display start: X-VESA tests increasing integer values starting
+   from 1, each via 4F07h BL=00h (SET) call followed by verification
+   read with BL=01h (GET). The first value for which the readback
+   matches the set value constitutes the alignment granularity of the
+   axis. If no value in the available interval passes verification,
+   the granularity is reported as undeterminable. The search range
+   is capped at the width of the available scroll space, with a
+   maximum ceiling of 32 pixels.
+
+   The second probe determines the upper limit of the display start
+   offset accepted by the interface. The search starts from value 32
+   and proceeds with geometric progression: the test value is doubled
+   for values up to 8192 pixels, incremented by 4096 for higher
+   values. The progression stops when the readback returns a value
+   differing from the one set or when the return code signals an
+   error; the current value at the time of failure constitutes the
+   detected upper limit. If no failure is detected within the
+   available range, the limit is reported as not reached within the
+   search range. The second probe is executed only if the scroll
+   space exceeds 32 pixels; otherwise the limit is not determinable
+   with the current virtual page.
+
+   After characterization, the display start is reset to 0,0 and
+   the complete virtual page is drawn. The content includes:
+
+   - A perimeter frame at the dimensions of the virtual page.
+   - A grid of horizontal and vertical lines spaced 100 pixels,
+     covering the entire extent of the page.
+   - Numeric coordinate labels in pixels positioned at every grid
+     intersection, with thousands separator. Coordinates are written
+     via the virtual redirector and then transferred to graphic VRAM.
+   - A fixed information panel in the upper left corner (51x11
+     characters, black background) showing: physical resolution and
+     memory model, VRAM access mode, available VRAM, virtual page
+     dimensions, available key prompt.
+
+   Navigation is managed via function 4F07h BL=00h at each position
+   update:
+
+     Cursor keys        Scroll by 1 pixel
+     CTRL + Cursor      Scroll by 10 pixels, with automatic clamping
+                        to page limits
+     DEL                Reset to initial position 0,0
+     Mouse              Scroll with mouse (if available)
+
+   If a compatible INT 33h mouse driver is present and functional,
+   the mouse is enabled: movement limits are set to the horizontal
+   and vertical virtual resolution; mouse position is synchronized
+   at every cycle. Mouse presence is detected via INT 21h/35h on
+   the INT 33h vector followed by MOUSE_GET_STATUS; if the vector
+   is null or the driver does not respond the mouse is not activated.
+   When the movement range exceeds 32767 pixels in either direction,
+   X-VESA activates the MOUSE_X_DEM or MOUSE_Y_DEM flag for the
+   affected axis and halves the limit value set via MOUSE_MAXMIN;
+   the position returned by the driver is doubled before updating
+   the virtual offset, allowing navigation over virtual pages
+   exceeding the signed 16-bit limit of the INT 33h interface. The
+   mouse cursor is hidden via MOUSE_HIDE_CURSOR before navigation
+   starts.
+
+   On ESC press the video mode is closed and a summary panel is
+   displayed with the results of the 4F07h function characterization.
+   The panel reports, for each of the two axes, the detected alignment
+   granularity and the upper limit of the offset accepted by the
+   interface. Granularity is expressed in pixels if determined, or
+   reported as absent (no alignment constraint detected in the search
+   range) or as undeterminable. The upper limit is expressed in pixels
+   if detected within the search range, or reported as not reached in
+   the explored range.
+
+   The panel also reports the horizontal granularity of the virtual
+   resolution: the interval in pixels at which function 4F06h
+   generates a new distinct BytesPerScanLine value. This value is
+   derived from the compatible virtual resolution table built during
+   the test and indicates the minimum horizontal step at which the
+   VESA interface accepts a different scanline width.
+
+   The panel remains visible until ESC is pressed, after which the
+   main screen is restored.
+
+
+   2.7.8. Test switch DAC 6/8 bit
+
+   Available for palettized video modes (8 bpp packed pixel). Verifies
+   support for switching the DAC from 6 to 8 bit via VBE function
+   4F08h.
+
+   Before opening the test screen, X-VESA performs a two-phase
+   preliminary validation: sets the DAC to 8 bit via 4F08h BL=01h
+   and verifies its return code; resets to 6 bit via BL=00h and
+   verifies the return again. If either call does not return the
+   expected confirmation code, the command is aborted with a warning
+   and text mode is restored. Only passing both verifications allows
+   proceeding.
+
+   The screen displays four side-by-side gradients: red, green, blue
+   and grey. Each gradient covers 64 intensity levels distributed
+   over a number of columns proportional to the horizontal resolution;
+   the 256 palette indices are evenly divided among the four channels.
+   In 6-bit mode the gradient appears divided into distinct bands;
+   in 8-bit mode the gradient is continuous.
+
+   Palette writing occurs via two distinct paths based on the DAC_VGA
+   flag detected at video mode opening. On the direct VGA path, I/O
+   ports 3C8h and 3C9h are written sequentially: each entry increments
+   the active channel component by 4 (64 steps x 4 = 256, from 0 to
+   252 inclusive), with the other channel components set to zero; the
+   grey gradient sets all three RGB components to the same value. On
+   the VESA path, the complete palette is built in the stack segment
+   buffer and transferred in bulk via function 4F09h BL=00h with
+   CX=100h (256 entries) starting from index DX=0.
+
+   The SPACE or + key toggles between the two modes. At each toggle
+   only the digit '6' or '8' in the label of each gradient is
+   rewritten transparently, without redrawing the entire screen;
+   the label color is derived from the palette index of the
+   corresponding gradient.
+
+   DAC type detection is performed via direct probe on the PEL mask
+   register (3C6h) at video mode opening, regardless of the declared
+   VESA version. The sequence writes patterns 55h and AAh and verifies
+   the readback. If the DAC does not respond correctly to direct I/O
+   access (DAC_VGA flag set), X-VESA automatically uses VBE function
+   4F09h as an alternative path.
+
+
+   2.7.9. Detect available video memory
+
+   Measures the amount of VRAM actually accessible for the current
+   video mode via direct physical probe. The unique pattern written
+   every 1 KB consists of two 32-bit values: the BIOS tick at the
+   start of measurement (fixed for the entire session) and a 32-bit
+   progressive counter incremented for each block. Before writing the
+   pattern, X-VESA verifies that the cell does not already contain
+   the expected values: if it does, measurement stops, interpreting
+   the condition as memory aliasing -- i.e. the same physical location
+   is mapped to two distinct addresses. Measurement terminates when
+   memory does not correctly respond to readback.
+
+   For planar modes (4 bpp), before starting the probe X-VESA directly
+   configures the GCR and Sequencer registers to disable chain-4 mode
+   and enable access to the four separate planes. The block counter
+   is multiplied by the number of bpp at the end, obtaining the total
+   size of accessible VRAM across all planes.
+
+   In banked mode the scan advances in 1 KB blocks within each window,
+   switching bank via the pointer at the end of each window; the bank
+   counter is 16-bit and the scan stops at the first bank that does
+   not return confirmation from the switch function. In linear mode
+   the scan advances linearly from the physical address of the linear
+   frame buffer.
+
+   For VESA 3.0 and higher cards, the TotalMemory field of the
+   VbeInfoBlock is used as the upper limit of the measurement: the
+   scan stops when the block counter reaches TotalMemory x 64 KB.
+   Pressing R allows removing this limit and performing an
+   unconstrained measurement (with warning); the limit is available
+   exclusively in linear mode on interfaces above VESA 2.0.
+
+   The result does not depend on information declared by the VESA
+   interface (TotalMemory field of the VbeInfoBlock), but reflects
+   the amount of memory physically accessible in that video mode. On
+   cards with shared memory or with a BIOS reporting incorrect values,
+   the result may differ from what is declared.
+
+   The command is available in planar mode from 1 to 4 bpp, in packed
+   mode at 1, 2, 4 or 8 bpp, and in direct color mode.
+
+
+   2.8. Execution times
+
+   Command execution times vary significantly depending on the command
+   and the hardware in use.
+
+   Command 2.7.1 is instantaneous. Command 2.7.2 may take up to 15
+   seconds; during measurement a progress bar is updated to confirm
+   that X-VESA is operational. Command 2.7.3 has a real-time
+   monitoring interface with progress indicators, elapsed time and
+   estimated time to completion; total duration may reach several
+   hours depending on the amount of VRAM to verify and the number of
+   configured passes. Command 2.7.4 may take up to 30 seconds on
+   some hardware; during sample collection a LED KITT animation is
+   performed on the keyboard status LEDs, which however may not be
+   visible on all systems: on modern systems with UEFI firmware in
+   CSM mode, direct control of keyboard LEDs may be non-functional.
+   Command 2.7.5 is instantaneous. Command 2.7.6 is instantaneous.
+   Command 2.7.7 may take up to 20 seconds during the construction
+   of the compatible virtual resolution table via 4F06h function
+   probe; in Insane or Custom mode with a wide range, times may be
+   significantly longer. During construction a visual signal in the
+   graphic VRAM confirms that the program is operational. Command
+   2.7.8 is instantaneous. Command 2.7.9 may take up to 10 seconds
+   on hardware with large amounts of VRAM.
+
+
+   2.9. Screenshot (F2 key)
+
+   At any point in the program, pressing F2 saves a screenshot of
+   the current image in IFF-PBM format. The file is created with an
+   automatic name (FILExxxx.PBM) without overwriting existing files,
+   up to a maximum of 10,000 files per working directory.
+
+   The file is structured according to the IFF specification with
+   FORM, CMAP and BODY chunks in big-endian format. Each scanline is
+   compressed in PackBits format before writing to disk; the algorithm
+   implements an optimization over standard PackBits: when a sequence
+   of identical bytes is immediately preceded by a not-yet-saturated
+   literal block, the bytes of the sequence are absorbed into the
+   existing literal block instead of emitting a separate bytecode,
+   further reducing the compressed size. Since the final dimensions
+   are not known in advance, the FORM and BODY chunk sizes are written
+   in a second pass via seek on the already-created file.
+
+   Image resolution depends on context. In standard text mode it
+   corresponds to the physical screen dimensions in pixels
+   (TEXT_WIDTH x VIDEO_FONT_WIDTH x TEXT_HEIGHT x VIDEO_FONT_HEIGHT).
+   In VESA text mode it is calculated by multiplying the character
+   resolution by the loaded font dimensions. In VESA graphic mode the
+   X_RES x Y_RES resolution of the current video mode is used. Width
+   is rounded up to the next multiple of 2 as required by the IFF
+   specification.
+
+   Color depth is palettized (PACKED_BIT_COLOR planes with CMAP
+   chunk) for text, planar and packed pixel modes; true color
+   (BIT_TRUE_COLOR planes, without CMAP chunk) for direct color modes.
+   For palettized modes the palette is acquired directly from hardware:
+   the first 16 values via the Attribute Controller, the remaining
+   entries via the DAC. If the DAC operates at 6 bit, each RGB
+   component is normalized to 8 bit by multiplying by 4. Before
+   compression, graphic elements overlaid by the X-VESA interface are
+   removed from the image via XOR operation. If the total bytes
+   written is odd, a padding byte is added according to the IFF
+   specification. On completion, in VESA graphic mode an audible
+   confirmation signal is emitted.
+
+
+===========================================================================
+   3. SYSTEM REQUIREMENTS
+===========================================================================
+
+   - MS-DOS version 5.0 or higher
+   - Intel 80386 processor or higher
+     80386 CPUs affected by the MUL bug are not supported
+   - 302,048 bytes of free conventional memory
+   - VESA 1.0 or higher compatible graphics card
+
+   X-VESA is designed for use on real hardware. Operation on
+   emulators or virtual machines is technically possible, but its
+   use is discouraged except for the purpose of finding bugs in the
+   program: timing, jitter and VRAM access speed measurements produce
+   meaningless results in an emulated environment, and the behavior
+   of the emulated VESA interface may differ substantially from that
+   of the real hardware that X-VESA is designed to analyze.
+
+
+===========================================================================
+   4. LICENSE
+===========================================================================
+
+   X-VESA is released under the GNU General Public License version 3
+   (GPL-3.0). You are free to use, study, modify and distribute
+   X-VESA under the terms of the GPL-3.0 license. Any modified or
+   derived version must be distributed under the same license and
+   must include the complete source code. This document is an
+   integral part of the X-VESA distribution and must always
+   accompany the executable. The author disclaims all liability for
+   damages caused by the use of X-VESA. Use of the program implies
+   acceptance of the license terms.
+
+   Full license text: https://www.gnu.org/licenses/gpl-3.0.html
+
+
+===========================================================================
+   5. WHERE TO FIND THE LATEST VERSION OF X-VESA
+===========================================================================
+
+   New versions of X-VESA can be found at:
+   https://github.com/marco-pistella/x-vesa
+   
+   Official thread:
+   https://www.vogons.org/viewtopic.php?t=111021
+
+===========================================================================
+   6. HOW TO CONTACT THE AUTHOR
+===========================================================================
+
+   The author can be contacted directly at: mpistella@libero.it
+
+   Reports of malfunctions, anomalous behavior on specific hardware
+   and suggestions for future versions are welcome.
+
+
+===========================================================================
+   7. CONTENTS OF THE XVESA200.ZIP ARCHIVE
+===========================================================================
+
+   X-VESA.COM   - Executable
+   X-VESA.TXT   - This document
+   PBM2PNG.EXE  - Converter from IFF-PBM format to PNG
+   PBM2PNG.TXT  - PBM2PNG documentation
+   IPEREDID.COM - DOS TSR for managing multiple monitor EDIDs
+   IPEREDID.TXT - IPEREDID documentation
+   FILE_ID.DIZ  - Brief description
+
+
+===========================================================================
+   8. NOTES
+===========================================================================
+
+   X-VESA 2.0 is a complete rewrite from scratch of version 1.x,
+   developed in approximately 4 months entirely in x86 assembly
+   language. The source code consists of over 22,000 lines written
+   manually by the author. The compressed executable occupies
+   approximately 32 KiB.
+
+   X-VESA installs two handlers for critical runtime error management.
+   The DOS error handler (INT 24h) intercepts device malfunctions
+   during I/O operations and presents the user with the available
+   options (Ignore, Retry, Fail) as declared by the operating system,
+   correctly restoring the video state on exit. The INT 00h handler
+   (divide by zero) saves the entire CPU context at the time of the
+   crash -- 32-bit registers EAX-ESP, segment selectors DS/ES/FS/GS,
+   EFLAGS and CS:IP -- and displays them on a red screen after
+   reinitializing text mode. The program waits for ESC to be pressed
+   before restoring the original vector and exiting. The CS:IP value
+   is a direct diagnostic indicator: a C000h segment indicates that
+   the crash occurred inside the graphics card BIOS ROM, allowing the
+   malfunction to be attributed to the VESA implementation and not to
+   X-VESA code.
+
+
+                                                          Marco Pistella
+                                                     mpistella@libero.it
