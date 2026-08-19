@@ -659,29 +659,3 @@ encryption.
 
 Final `X-VESA.COM`: ~32 KiB compressed, expands to roughly 302,048 bytes at
 runtime (see §4.1 for how this figure is computed).
-
----
-
-## 10. Open points not yet verified
-
-These are documented here rather than silently asserted, pending further
-source review:
-
-- **ES/DS segment arithmetic (§5, §6).** `no_sdt_stub` computes
-  `DS = CS + ceil((end_code-start_code)/16)`. Given `X_VESA_MEM`'s formula
-  (§4.1) and its known value (~296,720 bytes, `MIN_MEM` = 262,144), the
-  CODE segment's actual assembled size works out to roughly 34.5 KB — which
-  would put this computed DS at only `CS+871h` paragraphs, not at the
-  `CS+2000h` STUB.COM fixes for its own relocation segment (§4.6, §5 step c).
-  If DATA's compressed body genuinely needs to be found by CODE.ASM at this
-  computed DS, the two offsets would need to coincide, and on current
-  evidence they don't appear to. This may be resolved by a LIBS\*.ASM
-  routine not yet reviewed (possibly around `Init_X_VESA.ASM`), or by a
-  detail of the relocation this document has not captured correctly — it is
-  flagged here rather than resolved.
-- **SAW.COM / CODE.COM header bytes (§4.4).** Whether the 5 bytes read at
-  EXE offset 768 are legitimately part of CODE.COM's content or are
-  incidentally carried into the output.
-- **SAW.COM / DATA.COM file handle (§4.4).** Whether the write to DATA.COM
-  genuinely relies on DOS reassigning the just-freed CODE.COM handle number,
-  or whether this document's register trace has missed something.
