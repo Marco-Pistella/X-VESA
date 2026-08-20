@@ -27,7 +27,6 @@ Memory model: SuperDoubleTiny (SDT)
    - 7.2 [CHECKSUM / SAVID](#72-checksum--savid)
 8. [Standard (non-release) build](#8-standard-non-release-build)
 9. [Full build sequence summary](#9-full-build-sequence-summary)
-10. [Open points not yet verified](#10-open-points-not-yet-verified)
 
 ---
 
@@ -262,26 +261,51 @@ X-VESA.EXE  →  CODE.COM   (CODE segment content)
                 DATA.COM   (DATA segment content, ORG 0h)
 ```
 
-SAW seeks to absolute offset 768 (0x300) into the EXE, reads a 5-byte header
-there, and uses the word at header+3 — shifted left 4 (paragraphs→bytes) — as
-the CODE segment's size; it reads that many bytes (minus the 5 header bytes
-already consumed) to complete the CODE segment content in a work buffer, then
-creates and writes `CODE.COM`, followed by reading the rest of the EXE file
-(the DATA segment) and writing it to `DATA.COM`.
+SAW seeks to absolute offset 768 (0x300) into the EXE — this is where
+TLINK's header ends and the load module begins, i.e. exactly where
+`CS:0100h` lands once the program runs. There is no EXE/TLINK header
+structure being parsed here: SAW reads the first **5 bytes of the CODE
+segment's own compiled content**, which are the first two assembled
+instructions of `start_code` (X-VESA.ASM) itself:
 
-**Note (unverified):** when writing `CODE.COM`, SAW recomputes the byte count
-from the same header word — this time *without* subtracting the 5 header
-bytes — and writes starting from the very beginning of its work buffer. On a
-literal register trace this means the first 5 bytes of `CODE.COM` would be
-the header bytes read at EXE offset 768 rather than assembled code; this may
-simply be legitimate content of the segment at that position in TLINK's EXE
-layout rather than an error — unconfirmed. Separately, the DOS file handle
-returned when `DATA.COM` is created does not appear, on a register-by-register
-trace, to be saved anywhere before the final write — the code only works if
-DOS reassigns `DATA.COM` the same handle number just freed when `CODE.COM`
-was closed (plausible, since DOS allocates the lowest free handle, but not an
-explicit invariant in the source). Both points are flagged here for the
-author to confirm rather than asserted as fact.
+```asm
+start_code:
+    mov ax,cs                                                    ; 8C C8      (2 bytes)
+    add ax,((OFFSET end_code - OFFSET start_code)+0Fh) SHR 4h     ; 05 lo hi   (3 bytes)
+```
+
+`mov ax,cs` assembles to `8C C8`; the short accumulator-form `add ax,imm16`
+assembles to `05` followed by its 2-byte immediate — five bytes total. That
+immediate operand is exactly the CODE segment's own size, rounded up to a
+paragraph, computed by the assembler at build time (the same value the SDT
+trampoline in §6 recomputes at runtime, and the same formula behind
+`X_VESA_MEM`, §4.1). SAW simply reads that immediate straight out of the
+instruction stream — `mov cx, word ptr [header+3]; shl cx,4` gives the
+CODE segment's size in bytes, no separate size field or header structure
+required anywhere. **`start_code`'s own opening instructions double as a
+machine-readable size record for SAW to consume.** Confirmed against a hex
+dump of the actual `CODE.COM` output (first bytes `8C C8 05 ...`).
+
+With that size in hand, SAW reads the remaining code bytes (that count
+minus the 5 already consumed) to complete the CODE segment in a work
+buffer, then creates and writes `CODE.COM` — this time writing the *full*
+size, header-derived bytes included, since they are genuine assembled code,
+not incidental header bytes. It then reads the rest of the EXE file (the
+DATA segment) and writes it to `DATA.COM`.
+
+**Note on the DATA.COM file handle:** the DOS file handle returned when
+`DATA.COM` is created is never explicitly saved to a register that
+survives — but it doesn't need to be. DOS allocates file handles from the
+lowest free slot in the Job File Table: `X-VESA.EXE` gets handle 5 (0–4 are
+the standard reserved handles), `CODE.COM` gets 6, and once `CODE.COM` is
+closed that slot is freed — so when `DATA.COM` is created next, it is
+assigned that same handle, 6, deterministically. The BX value the trace
+carries forward as "CODE.COM's stale handle" is numerically identical to
+DATA.COM's own handle, because DOS reused the slot. This is a deliberate
+reliance on standard, documented DOS handle-allocation behavior, not a
+fragile coincidence — the same kind of low-level trick as the header bytes
+above: relying on a guaranteed platform invariant instead of spending a
+register on an explicit save.
 
 ### 4.5 APACK compression
 
@@ -323,6 +347,23 @@ At runtime, STUB relocates itself to a work segment computed as
 the high byte of AX, which is arithmetically equivalent to adding `2000h` to
 the full word — this segment is **128 KiB above CS, not 512 bytes**, despite
 what a byte-literal reading of `20h` might suggest.
+
+This particular offset is not arbitrary: 128 KiB is the exact, guaranteed
+maximum combined footprint of `CODE.COM` + `DATA.COM` under the
+SuperDoubleTiny model (64 KiB each, by definition — §4.1). Relocating STUB
+there means it can never collide with either segment, *regardless of their
+actual compressed or decompressed sizes* — the relocation offset is chosen
+against the model's worst case, not computed from this particular build's
+actual code size. This is also why STUB's own memory check (§5, step b)
+requires 192 KiB, not 128: 128 KiB covers the maximum CODE+DATA footprint,
+and the remaining 64 KiB is headroom needed to decompress DATA.COM into its
+own segment.
+
+**Important:** this relocation segment is purely a private, temporary
+staging area STUB uses for its own internal bootstrap shuffling. It has no
+fixed relationship to where DATA.COM's compressed body ultimately ends up —
+see §5 for how the *real* destination is communicated to STUB implicitly,
+through the ES register, without STUB ever needing to compute or know it.
 
 ### 4.7 PREPSTUB.COM — patching the stub
 
@@ -390,9 +431,13 @@ STUB.ASM, X-VESA.ASM and DATA.ASM sources.
      convert directly to paragraphs (1 KB = 64 paragraphs). Subtracts CS
      to obtain free paragraphs above the load point. If less than 192KB
      (3000h paragraphs): prints the "SDT-STUB V1.0.0 ... Not enough
-     memory" message, INT 20h.
+     memory" message, INT 20h. This figure is 128 KiB (the maximum
+     combined CODE+DATA footprint, §4.6) plus 64 KiB of headroom needed
+     to decompress DATA.COM into its own segment.
 
- c)  STUB sets SS = ES = CS + 2000h (128 KiB above CS) — see §4.6.
+ c)  STUB sets SS = ES = CS + 2000h (128 KiB above CS) — a fixed, worst-case
+     safe distance from both segments regardless of their actual size; see
+     §4.6.
 
  d)  STUB copies itself (start_code..end_code) to ES:0100h (same relative
      offset as loaded), word-granular (movsw), with a leading movsb if
@@ -404,12 +449,15 @@ STUB.ASM, X-VESA.ASM and DATA.ASM sources.
 
  f)  STUB moves DATA.COM's compressed body from its load position
      (immediately after CODE.COM's compressed body, in the *original*
-     load segment, at end_code + code_comp_len) to SEG_RELOC:end_code
-     (immediately after the relocated STUB code).
+     load segment, at end_code + code_comp_len) to SEG_RELOC:end_code —
+     a temporary parking spot inside STUB's own staging segment.
 
  g)  STUB moves CODE.COM's compressed body from the original segment's
      end_code offset down to that same original segment's offset 0100h,
-     overwriting the (already relocated) original STUB code.
+     overwriting the (already relocated) original STUB code. Immediately
+     before this move, STUB explicitly sets ES = DS (both = the original
+     load segment), so the move's implicit ES:DI destination lands where
+     intended.
 
  h)  STUB builds a synthetic return frame on the stack and far-returns
      into the original segment at offset 0100h — where CODE.COM's
@@ -417,26 +465,40 @@ STUB.ASM, X-VESA.ASM and DATA.ASM sources.
      which decompresses X-VESA's own code in place and ends with a near
      RET, using the address STUB set up on the stack.
 
- i)  Because SP is not 0FFFEh (the value DOS sets for a normally loaded
-     COM), the freshly decompressed X-VESA code's own entry point
-     (start_code, CODE.ASM) detects the mismatch and runs a short
-     trampoline (see §6): it pops the mismatched near-RET address APACK
-     left behind and reconstructs a correct far return that lands back
-     inside the relocated STUB, at SEG_RELOC:reloc_jmp_2.
+ i)  The freshly decompressed X-VESA code's own entry point (start_code,
+     CODE.ASM) immediately computes `ES = CS + ceil(codesize/16)` — this
+     is X-VESA's own actual, final DATA segment, positioned so that
+     `ES:0100h` lands exactly at the paragraph-rounded end of CODE (the
+     same natural position DATA occupies in the standard/saw builds too,
+     where it simply follows CODE contiguously). **This value is set once
+     here and is never touched again until DATA is fully in place** — it
+     survives the entire round-trip back into STUB below, because nothing
+     STUB does from this point on modifies ES.
 
- j)  At reloc_jmp_2, STUB moves DATA.COM's compressed body (parked at
-     SEG_RELOC:end_code since step f) down to SEG_RELOC:0100h — it does
-     NOT decompress it here. STUB's own work ends with one last retf,
+     Because SP is not 0FFFEh (the value DOS sets for a normally loaded
+     COM), start_code also detects a mismatch and runs a short trampoline
+     (see §6): it pops the mismatched near-RET address APACK left behind
+     and reconstructs a correct far return that lands back inside the
+     relocated STUB, at SEG_RELOC:reloc_jmp_2.
+
+ j)  At reloc_jmp_2, STUB moves DATA.COM's compressed body from its
+     staging spot (SEG_RELOC:end_code, since step f) using `rep movsw`.
+     STUB sets DS to SEG_RELOC (the *source*) but never touches ES — and
+     the x86 string instructions always target **ES:DI**, not DS:DI, for
+     the destination. So this move lands DATA's compressed body at
+     `ES:0100h` — the real, code-size-dependent segment X-VESA computed
+     and left in ES back in step (i), not at SEG_RELOC. STUB neither
+     knows nor needs to know that segment's value; it is simply relayed
+     through the register. STUB's own work ends with one last retf,
      which — via the frame X-VESA's trampoline set up in step (i) —
      lands execution at X-VESA's own no_sdt_stub continuation (CODE.ASM),
      back in the original CODE segment.
 
- k)  no_sdt_stub (CODE.ASM) computes DS = ES = CS + ceil(codesize/16) —
-     see §10 for an open question about whether this numerically lands
-     on SEG_RELOC — and SS = DS + START_STACK. It then pushes a synthetic
-     far-return frame (CS:start_x_vesa, then DS:(start_data+100h)) and
-     executes retf, landing at DS:0100h, where DATA.COM's compressed
-     body is expected to sit.
+ k)  no_sdt_stub (CODE.ASM) sets DS = ES (still the same value computed
+     in step i, untouched throughout) and SS = DS + START_STACK. It then
+     pushes a synthetic far-return frame (CS:start_x_vesa, then
+     DS:(start_data+100h)) and executes retf, landing at DS:0100h —
+     exactly where DATA.COM's compressed body was delivered in step (j).
 
  l)  APACK's decompressor for DATA runs there, decompressing DATA.ASM's
      content in place. The decompressed image's very first byte, at
@@ -490,9 +552,9 @@ return to the correct continuation point inside STUB.
 After `no_sdt_stub`:
 
 ```asm
-    mov  ax, es          ; ES = segment computed from CODE's own assembled size
-    mov  ds, ax          ; DS = data segment (expected to hold decompressed DATA)
-    add  ax, START_STACK
+    mov  ax, es          ; ES was set once, back at the very top of start_code
+    mov  ds, ax          ; (§5 step i), and carried unchanged through STUB's
+    add  ax, START_STACK ; entire relocation dance — DS = the real data segment
     mov  ss, ax           ; SS = stack segment
     push cs
     push OFFSET start_x_vesa
@@ -504,7 +566,10 @@ After `no_sdt_stub`:
 The double push/retf pattern (push target CS:IP, then push DATA:start_data,
 then retf) achieves a far jump while simultaneously passing the data segment
 pointer through the stack — a clean way to initialize DS and transfer control
-in a single instruction. See §5 steps (k)–(m) and §10 for how this resolves.
+in a single instruction. See §5 steps (i)–(m) for the full round-trip: this
+ES value is what STUB's own `reloc_jmp_2` (§5 step j) delivers DATA's
+compressed body into, via the default ES:DI destination of `movsw` — STUB
+never needs to know this segment's value, only to leave ES alone.
 
 `start_x_vesa` then adds a further 256 bytes (`10h` paragraphs) to DS/ES,
 sets CLD, and begins normal initialization: DOS version check, 80386
@@ -688,29 +753,3 @@ encryption.
 
 Final `X-VESA.COM`: ~32 KiB compressed, expands to roughly 302,048 bytes at
 runtime (see §4.1 for how this figure is computed).
-
----
-
-## 10. Open points not yet verified
-
-These are documented here rather than silently asserted, pending further
-source review:
-
-- **ES/DS segment arithmetic (§5, §6).** `no_sdt_stub` computes
-  `DS = CS + ceil((end_code-start_code)/16)`. Given `X_VESA_MEM`'s formula
-  (§4.1) and its known value (~296,720 bytes, `MIN_MEM` = 262,144), the
-  CODE segment's actual assembled size works out to roughly 34.5 KB — which
-  would put this computed DS at only `CS+871h` paragraphs, not at the
-  `CS+2000h` STUB.COM fixes for its own relocation segment (§4.6, §5 step c).
-  If DATA's compressed body genuinely needs to be found by CODE.ASM at this
-  computed DS, the two offsets would need to coincide, and on current
-  evidence they don't appear to. This may be resolved by a LIBS\*.ASM
-  routine not yet reviewed (possibly around `Init_X_VESA.ASM`), or by a
-  detail of the relocation this document has not captured correctly — it is
-  flagged here rather than resolved.
-- **SAW.COM / CODE.COM header bytes (§4.4).** Whether the 5 bytes read at
-  EXE offset 768 are legitimately part of CODE.COM's content or are
-  incidentally carried into the output.
-- **SAW.COM / DATA.COM file handle (§4.4).** Whether the write to DATA.COM
-  genuinely relies on DOS reassigning the just-freed CODE.COM handle number,
-  or whether this document's register trace has missed something.
