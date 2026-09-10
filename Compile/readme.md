@@ -174,8 +174,11 @@ assembled CODE-segment size rounded up to a paragraph *plus one extra
 paragraph-block of 256 bytes of margin* (`+10Fh`, not the plain `+0Fh`
 paragraph-rounding used elsewhere, e.g. in `start_code`'s own ES
 computation, §6), plus a fixed 256 KiB floor (`MIN_MEM = 262144`). With the
-current build this works out to roughly 296,720 bytes required (302,048
-with Command 8's extra buffer).
+current build this works out to exactly 302,416 bytes required — confirmed
+directly from the assembled `X-VESA.OBJ` (`dos_message_17`, the literal
+embedded string). This supersedes an earlier, unverified split into a
+"296,720 base / 302,048 with Command 8's extra buffer" figure, which this
+direct check contradicts.
 
 A standard EXE with two segments solves the layout problem but suffers from
 DOS EXE overhead and, more importantly, cannot be packed with a self-contained
@@ -779,8 +782,8 @@ encryption.
   C:\VC\VC.COM opens (Volkov Commander)
 ```
 
-Final `X-VESA.COM`: ~32 KiB compressed, expands to roughly 302,048 bytes at
-runtime (see §4.1 for how this figure is computed).
+Final `X-VESA.COM`: ~32 KiB compressed, expands to exactly 302,416 bytes at
+runtime (see §4.1 for how this figure is confirmed).
 
 ---
 
