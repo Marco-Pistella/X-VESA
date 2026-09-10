@@ -27,6 +27,7 @@ Memory model: SuperDoubleTiny (SDT)
    - 7.2 [CHECKSUM / SAVID](#72-checksum--savid)
 8. [Standard (non-release) build](#8-standard-non-release-build)
 9. [Full build sequence summary](#9-full-build-sequence-summary)
+- [Appendix A: MAKE_PRG.BAT and dosbox-x.conf \[autoexec\]](#appendix-a-make_prgbat-and-dosbox-xconf-autoexec)
 
 ---
 
@@ -35,6 +36,8 @@ Memory model: SuperDoubleTiny (SDT)
 ```
 X-VESA\
 │
+├── MAKE_PRG.BAT        Build orchestration script (see §3, Appendix A)
+├── dosbox-x.conf       DOSBox-X config; [autoexec] drives the DOS side (Appendix A)
 ├── X-VESA.ASM          Main source — CODE segment only
 ├── INCLUDE\
 │   ├── DATA.ASM        DATA segment (included at end of X-VESA.ASM)
@@ -75,7 +78,7 @@ directive (the auxiliary build tools below use `.386` or `.8086`).
 | dosbox-x.exe | Windows | Runs the DOS-side toolchain |
 | TLINK | DOS | Links X-VESA.OBJ → X-VESA.EXE |
 | SAW.COM | DOS | Splits X-VESA.EXE → CODE.COM + DATA.COM |
-| APACK | DOS | Compresses CODE.COM and DATA.COM separately |
+| APACK | DOS | Compresses CODE.COM and DATA.COM separately — download: https://www.ibsensoftware.com/download.html |
 | PREPSTUB.COM | DOS | Patches STUB.COM with compressed sizes |
 | CRYPT.COM | DOS | XOR-encrypts X-VESA.COM (release only) |
 | CHECKSUM (SAVID) | DOS | Embeds CRC at end of X-VESA.COM (every build mode) |
@@ -140,6 +143,10 @@ Only the **release** build produces the final distributable `X-VESA.COM` with
 the full SDT memory model and encryption. **CHECKSUM runs for every mode**
 (standard, saw, and release alike) — it sits at a shared `:end` label all
 three branches fall through to, not only after the release-specific steps.
+
+The full, verbatim text of `MAKE_PRG.BAT` and of the `[autoexec]` section
+of `dosbox-x.conf` is reproduced in **Appendix A**; `MAKE_PRG.BAT` is also
+included as a standalone file in this folder.
 
 ---
 
@@ -774,3 +781,92 @@ encryption.
 
 Final `X-VESA.COM`: ~32 KiB compressed, expands to roughly 302,048 bytes at
 runtime (see §4.1 for how this figure is computed).
+
+---
+
+## Appendix A: MAKE_PRG.BAT and dosbox-x.conf [autoexec]
+
+Reproduced verbatim, since §3 above only describes their behavior. The
+`....\` fragments are exactly as they appear in the source; if they are a
+placeholder for a real path in the original environment rather than literal
+syntax, replace them with the actual path before use.
+
+`MAKE_PRG.BAT` (also included as a standalone file in this folder):
+
+```bat
+@echo off
+IF "%1"=="INIT" goto INIT
+IF "%1"=="DOSBOX" goto DOSBOX
+IF "%DOSBOX-X%"=="1" GOTO DOS
+....\WIN\ASMC\BIN\ASMC.EXE X-VESA.ASM
+....\WIN\SYNC\SYNC64.EXE B:
+copy X-VESA.OBJ B:
+copy MAKE_PRG.BAT B:
+tasklist /FI "IMAGENAME eq dosbox-x.exe" 2>NUL | findstr /I "dosbox-x.exe" >NUL
+if NOT %ERRORLEVEL% equ 0 call MAKE_PRG.BAT INIT
+goto end_end
+:INIT
+cd ....\WIN\DOSBOX-X
+start dosbox-x.exe
+goto end_end
+:DOSBOX
+C:
+CD \PROJECTS\X-VESA
+COPY A:\MAKE_PRG.BAT
+COPY A:\X-VESA.OBJ
+CALL MAKE_PRG.BAT
+C:\VC\VC.COM
+goto end_end
+:DOS
+del x-vesa.com
+REM .\utility\tasm X-VESA.ASM /m > asm.err
+copy a:\x-vesa.obj
+....\COMPILE\TLINK.EXE X-VESA.OBJ
+if "%1"=="release" goto release
+if not "%1"=="saw" goto standard
+.\utility\SAW\saw.com
+....\COMPILE\apack -x DATA.COM DATA.COM
+copy CODE.COM + DATA.COM X-VESA.COM /B
+del code.com
+del data.com
+goto end
+:standard
+....\COMPILE\exe2com X-VESA.EXE X-VESA.COM
+goto end
+:release
+.\utility\SAW\saw.com
+....\COMPILE\apack -x DATA.COM DATA.COM
+....\COMPILE\apack -x CODE.COM CODE.COM
+copy .\utility\stub\STUB.COM
+.\utility\stub\PREPSTUB.COM
+copy STUB.COM + CODE.COM + DATA.COM X-VESA.COM /B
+del code.com
+del data.com
+del stub.com
+.\utility\crypt\crypt X-VESA.COM
+:end
+.\utility\checksum\checksum
+REM del X-VESA.OBJ
+del X-VESA.BAK
+del X-VESA.MAP
+del X-VESA.EXE
+del asm.err
+dir X-VESA.*
+copy x-vesa.com a:
+:end_end
+```
+
+`dosbox-x.conf`, `[autoexec]` section (the rest of the file — machine,
+CPU, sound, and other DOSBox-X settings — is not reproduced here, as it
+was not part of the material reviewed for this document):
+
+```ini
+[autoexec]
+Lines in this section will be run at startup.
+You can put your MOUNT lines here.
+SET DOSBOX-X=1
+SET PATH=%PATH%;C:\COMMAND;C:\COMPILE;C:\DIAGS;C:\VC
+mount a b:
+mount c ....\DOS
+call a:\make_prg.bat DOSBOX
+```
