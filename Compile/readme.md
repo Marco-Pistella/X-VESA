@@ -105,7 +105,8 @@ environments:
    If not, it relaunches itself with the `INIT` argument, which starts
    DOSBox-X and returns.
 2. DOSBox-X's `[autoexec]` section (in `dosbox-x.conf`) sets the
-   `DOSBOX-X` environment variable, mounts the shared folder as `A:`
+   `DOSBOX-X` environment variable, extends `PATH` with
+   `C:\COMMAND;C:\COMPILE;C:\DIAGS;C:\VC`, mounts the shared folder as `A:`
    (mirroring Windows' `B:`) and `C:` as the DOS toolchain folder, then
    calls `A:\MAKE_PRG.BAT DOSBOX`. **This autoexec, and the copy+build chain
    it triggers, only runs once — when DOSBox-X itself starts.**
@@ -118,12 +119,13 @@ environments:
    one, invoke `MAKE_PRG.BAT saw` or `MAKE_PRG.BAT release` manually from
    inside DOSBox-X, in `C:\PROJECTS\X-VESA`.
 
-**Practical consequence:** if DOSBox-X is already open when the Windows side
-reassembles, the tasklist check finds it running and does nothing further —
-the fresh OBJ lands on the shared drive but is *not* automatically pulled
-into `C:\PROJECTS\X-VESA`. From an already-open DOSBox-X session, re-copying
-`A:\X-VESA.OBJ` (and rerunning `MAKE_PRG.BAT`) by hand is needed to pick up
-a new assembly.
+**Practical consequence:** the `:DOS` label — reached both through the
+`:DOSBOX` chain above and when `MAKE_PRG.BAT saw`/`release` is invoked
+manually from an already-open DOSBox-X session — begins with `copy
+a:\x-vesa.obj`, unconditionally, before `TLINK` runs. So a fresh OBJ on the
+shared drive is always picked up automatically the next time
+`MAKE_PRG.BAT` is invoked inside DOSBox-X, however it's started; no manual
+re-copy is ever needed.
 
 The actual DOS-side build, in the script's `:DOS` label, supports three
 modes selected by the argument passed to it:
@@ -149,7 +151,7 @@ A standard DOS COM file is loaded in a single segment: CS = DS = ES = SS.
 The entire 64KB is shared between code, data, and stack, which is sufficient
 for small programs but not for X-VESA, which requires:
 
-- ~34KB of code (the CODE segment's actual assembled size, see §10)
+- ~34KB of code (the CODE segment's actual assembled size)
 - 64KB of data (mode tables, EDID buffers, VBE structures, strings)
 - 64KB text/graphics buffer (10 video pages of 80×40)
 - 64KB stack + font buffer
@@ -159,10 +161,14 @@ for small programs but not for X-VESA, which requires:
 There are two separate, independent memory checks in the pipeline: STUB.COM
 performs a coarse check for at least 192 KiB of free conventional memory
 before even starting its own bootstrap; X-VESA's own code later performs a
-second, precise check against `X_VESA_MEM` — a constant computed as the
-actual assembled CODE-segment size (rounded to a paragraph) plus a fixed
-256 KiB floor (`MIN_MEM`). With the current build this works out to roughly
-296,720 bytes required (302,048 with Command 8's extra buffer).
+second, precise check against `X_VESA_MEM` — a constant computed in
+`X-VESA.INC` as `(((codesize + 10Fh) SHR 4h) SHL 4h) + MIN_MEM`: the actual
+assembled CODE-segment size rounded up to a paragraph *plus one extra
+paragraph-block of 256 bytes of margin* (`+10Fh`, not the plain `+0Fh`
+paragraph-rounding used elsewhere, e.g. in `start_code`'s own ES
+computation, §6), plus a fixed 256 KiB floor (`MIN_MEM = 262144`). With the
+current build this works out to roughly 296,720 bytes required (302,048
+with Command 8's extra buffer).
 
 A standard EXE with two segments solves the layout problem but suffers from
 DOS EXE overhead and, more importantly, cannot be packed with a self-contained
@@ -196,9 +202,18 @@ and three 64KB blocks past DS respectively) — not each individually "64KB",
 despite the round numbers. They line up with this table: DS+`1000h` lands on
 the unnamed text buffer, DS+`2000h` (`START_STACK`) on SS, DS+`3000h`
 (`SEGMENT_4`) on the I/O buffer — consistent with the sequential layout
-above. See §10 for an open question about whether STUB.COM's own,
-unrelated use of a `+2000h` relocation offset is a coincidence with
-`SEGMENT_3`/`START_STACK` or not.
+above.
+
+**Note:** STUB.COM's own `+2000h` relocation offset (§4.6, an offset from
+*CS*, the original load segment) is numerically identical to
+`SEGMENT_3`/`START_STACK` (`2000h`, an offset from *DS*, the final data
+segment) — confirmed directly in `X-VESA.INC`, where both share the literal
+`2000h`. The two are unrelated in the source itself: STUB never reads
+`START_STACK`, and its own offset is derived purely from the 128 KiB
+worst-case CODE+DATA footprint (§4.6). Whether the shared value reflects a
+deliberate design choice or is simply the same natural round number
+recurring for two different 128 KiB-scale quantities isn't something the
+source settles either way.
 
 ### 4.3 Source structure: CODE and DATA segments
 
@@ -328,7 +343,7 @@ address. The compressed sizes of both files are needed by PREPSTUB.
 
 ### 4.6 STUB.COM — the bootstrap
 
-`STUB.COM` (`.8086`-compatible, banner `SDT-STUB V1.0.0, 15/04/2026`) performs the
+`STUB.COM` (`.8086`-compatible, banner `SDT-STUB V1.0.0 (15/04/2026)`) performs the
 two-stage decompression and segment relocation. Its source (`STUB.ASM`)
 assembles to a small binary with two patch slots near its end:
 
@@ -584,7 +599,7 @@ enumeration, and main loop.
 
 ### 7.1 CRYPT.COM
 
-`CRYPT.COM` (banner `Crypt V1.2 by M.Pistella, 18/04/2026`) is a command-line tool
+`CRYPT.COM` (banner `Crypt V1.2 by M.Pistella (18/04/2026)`) is a command-line tool
 (`CRYPT.COM <file>`) that takes exactly one argument, parsed via a small
 custom PSP argument parser (`Get_Args`); with zero or more than one argument
 it prints a usage message and exits.
@@ -677,11 +692,12 @@ MAKE_PRG.BAT saw       → SAW + apack DATA only + concatenate (no STUB, no CRYP
 In the standard build, `exe2com` converts the two-segment EXE to a flat COM.
 Only the CODE segment is accessible; the DATA segment is appended but not
 separately addressable as a full 64KB segment. **This is why the standard
-and saw builds don't run into the open question flagged in §10:** the same
-generic `ES = CS + ceil(codesize/16)` computation in `start_code` (§6) works
-correctly here, because `exe2com` places DATA immediately and contiguously
-after CODE — there is no STUB-imposed fixed relocation offset to reconcile
-with, unlike the release build. This mode is the *default*
+and saw builds never need to reconcile anything against a STUB-imposed
+relocation offset:** the same generic `ES = CS + ceil(codesize/16)`
+computation in `start_code` (§6) works correctly here, because `exe2com`
+places DATA immediately and contiguously after CODE — there is no
+STUB-imposed fixed relocation offset at all, unlike the release build.
+This mode is the *default*
 when the build is launched from inside DOSBox-X (see §3) and is used during
 development to avoid the full SDT pipeline on every iteration.
 
@@ -715,6 +731,8 @@ encryption.
 
 [DOS — MAKE_PRG.BAT release, run manually for a release build]
 
+  del x-vesa.com                     (clears any previous output first)
+  copy a:\x-vesa.obj                 (always re-pulled fresh, every run — see §3)
   TLINK X-VESA.OBJ
   → X-VESA.EXE        (two-segment: CODE + DATA)
 
@@ -744,7 +762,10 @@ encryption.
   → X-VESA.COM         (4-byte CRC appended)
 
   [cleanup, shared by all modes: del X-VESA.BAK, X-VESA.MAP, X-VESA.EXE,
-   asm.err; dir listing; copy X-VESA.COM back to A:\ ]
+   asm.err (a no-op today — the line that used to generate asm.err, a
+   direct TASM assembly run from inside DOS, is commented out in the real
+   script, superseded by the Windows-side ASMC step); dir listing; copy
+   X-VESA.COM back to A:\ ]
   [X-VESA.OBJ is NOT deleted — the delete line is commented out]
 
 [back inside DOSBox-X, after the DOSBOX branch's build call]
