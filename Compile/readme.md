@@ -74,7 +74,7 @@ directive (the auxiliary build tools below use `.386` or `.8086`).
 | Tool | Environment | Role |
 |---|---|---|
 | ASMC | Windows | Assembles X-VESA.ASM → X-VESA.OBJ |
-| SYNC64.EXE | Windows | Prepares the drive shared with DOSBox-X (exact function undocumented; the actual file copy is done by separate `copy` commands, see §3) |
+| SYNC64.EXE | Windows | Flushes the Windows disk cache for the shared drive B:, forcing pending writes to disk immediately instead of letting Windows delay them — necessary before DOSBox-X (which reads the shared folder independently of Windows' cache) can see the freshly copied files (see §3) |
 | dosbox-x.exe | Windows | Runs the DOS-side toolchain |
 | TLINK | DOS | Links X-VESA.OBJ → X-VESA.EXE |
 | SAW.COM | DOS | Splits X-VESA.EXE → CODE.COM + DATA.COM |
@@ -99,11 +99,13 @@ driven by a **single `MAKE_PRG.BAT`** that invokes itself across both
 environments:
 
 1. Run without arguments on **Windows**, it assembles `X-VESA.ASM` with ASMC,
-   then runs `SYNC64.EXE B:` — its exact function isn't documented here, but
-   given the drive-letter argument it most likely prepares/mounts the shared
-   drive rather than doing the file transfer itself, since two explicit
-   `copy` commands follow it (`copy X-VESA.OBJ B:\` and
-   `copy MAKE_PRG.BAT B:\`) to actually place the files there. The script
+   then runs `SYNC64.EXE B:` — a disk-cache flush utility, forcing Windows
+   to commit any pending, cached writes for the shared drive `B:` to disk
+   immediately, so DOSBox-X (which reads that same shared folder from
+   outside Windows' own file cache) never sees stale or half-written data.
+   It does not do the file transfer itself: two explicit `copy` commands
+   follow it (`copy X-VESA.OBJ B:\` and `copy MAKE_PRG.BAT B:\`) to actually
+   place the files there. The script
    then checks (via `tasklist`) whether `dosbox-x.exe` is already running.
    If not, it relaunches itself with the `INIT` argument, which starts
    DOSBox-X and returns.
@@ -269,7 +271,7 @@ precedes `start_data` in the assembled segment. Its single instruction,
 relies on to hand control back to CODE once DATA has been decompressed (see
 §5, step l).
 
-`NUM_TO_CHAR_PREP` is a compile-time TASM macro that converts a numeric
+`NUM_TO_CHAR_PREP` is a compile-time ASMC macro (MASM syntax) that converts a numeric
 constant to a string of decimal digit characters via `CATSTR` prepend,
 producing natural (non-reversed) digit order without runtime code.
 
@@ -486,9 +488,13 @@ STUB.ASM, X-VESA.ASM and DATA.ASM sources.
 
  h)  STUB builds a synthetic return frame on the stack and far-returns
      into the original segment at offset 0100h — where CODE.COM's
-     compressed body now sits. This runs APACK's decompressor for CODE,
-     which decompresses X-VESA's own code in place and ends with a near
-     RET, using the address STUB set up on the stack.
+     compressed body (prefixed by APACK's own small unpacking stub) now
+     sits. That stub decompresses X-VESA's real code in place and, once
+     done, simply falls through to that same offset 0100h — now holding
+     the freshly decompressed `start_code` — without ever touching the
+     stack. The two leftover words STUB's `retf` didn't consume (its own
+     `CS:reloc_jmp_2` return address) are still sitting there, completely
+     untouched, when `start_code` itself begins executing.
 
  i)  The freshly decompressed X-VESA code's own entry point (start_code,
      CODE.ASM) immediately computes `ES = CS + ceil(codesize/16)` — this
@@ -501,10 +507,11 @@ STUB.ASM, X-VESA.ASM and DATA.ASM sources.
      STUB does from this point on modifies ES.
 
      Because SP is not 0FFFEh (the value DOS sets for a normally loaded
-     COM), start_code also detects a mismatch and runs a short trampoline
-     (see §6): it pops the mismatched near-RET address APACK left behind
-     and reconstructs a correct far return that lands back inside the
-     relocated STUB, at SEG_RELOC:reloc_jmp_2.
+     COM), `start_code` itself — not APACK, which never inspects the
+     stack at all — detects the mismatch and runs a short trampoline
+     (see §6): it pops the two leftover words STUB's own `retf` left
+     behind (§5 step h) and reconstructs a correct far return that lands
+     back inside the relocated STUB, at SEG_RELOC:reloc_jmp_2.
 
  j)  At reloc_jmp_2, STUB moves DATA.COM's compressed body from its
      staging spot (SEG_RELOC:end_code, since step f) using `rep movsw`.
@@ -568,11 +575,14 @@ When DOS loads a COM file normally, SP is initialized to `0FFFEh`. The check
 `cmp sp, 0FFFEh` / `je no_sdt_stub` detects this case.
 
 When STUB launches CODE via the far call chain (§5, step h), SP is not
-`0FFFEh` (STUB has used the stack). The SDT path executes: it pops the APACK
-return address (bx:cx), then reconstructs a new far return frame that will
-land at `no_sdt_stub` after exchanging the return addresses. This is the
-trampoline that allows APACK's decompressor (which ends with a near `ret`) to
-return to the correct continuation point inside STUB.
+`0FFFEh` because STUB's own synthetic return frame left two words on the
+stack unconsumed — APACK's decompressor runs and falls through to
+`start_code` without ever touching them. `start_code` itself is what
+reads this leftover state: it pops those two words (STUB's own
+`CS:reloc_jmp_2` return address), then reconstructs a new far return frame
+that lands back at that exact point inside STUB. This is the
+trampoline that bounces control from the freshly decompressed X-VESA code
+back into STUB for its second phase (moving DATA into place, §5 steps j-k).
 
 After `no_sdt_stub`:
 
@@ -729,7 +739,7 @@ encryption.
 [Windows]
   ASMC X-VESA.ASM
   → X-VESA.OBJ
-  SYNC64.EXE B:                      (prepares the shared drive; exact function undocumented)
+  SYNC64.EXE B:                      (flushes the Windows disk cache for B: before the copies below)
   copy X-VESA.OBJ B:\  /  copy MAKE_PRG.BAT B:\
   → launches dosbox-x.exe if not already running
 
@@ -789,10 +799,7 @@ runtime (see §4.1 for how this figure is confirmed).
 
 ## Appendix A: MAKE_PRG.BAT and dosbox-x.conf [autoexec]
 
-Reproduced verbatim, since §3 above only describes their behavior. The
-`....\` fragments are exactly as they appear in the source; if they are a
-placeholder for a real path in the original environment rather than literal
-syntax, replace them with the actual path before use.
+Reproduced verbatim, since §3 above only describes their behavior.
 
 `MAKE_PRG.BAT` (also included as a standalone file in this folder):
 
@@ -801,15 +808,15 @@ syntax, replace them with the actual path before use.
 IF "%1"=="INIT" goto INIT
 IF "%1"=="DOSBOX" goto DOSBOX
 IF "%DOSBOX-X%"=="1" GOTO DOS
-....\WIN\ASMC\BIN\ASMC.EXE X-VESA.ASM
-....\WIN\SYNC\SYNC64.EXE B:
-copy X-VESA.OBJ B:
-copy MAKE_PRG.BAT B:
+..\..\WIN\ASMC\BIN\ASMC.EXE X-VESA.ASM
+..\..\WIN\SYNC\SYNC64.EXE B:
+copy X-VESA.OBJ B:\
+copy MAKE_PRG.BAT B:\
 tasklist /FI "IMAGENAME eq dosbox-x.exe" 2>NUL | findstr /I "dosbox-x.exe" >NUL
 if NOT %ERRORLEVEL% equ 0 call MAKE_PRG.BAT INIT
 goto end_end
 :INIT
-cd ....\WIN\DOSBOX-X
+cd ..\..\WIN\DOSBOX-X
 start dosbox-x.exe
 goto end_end
 :DOSBOX
@@ -824,22 +831,22 @@ goto end_end
 del x-vesa.com
 REM .\utility\tasm X-VESA.ASM /m > asm.err
 copy a:\x-vesa.obj
-....\COMPILE\TLINK.EXE X-VESA.OBJ
+..\..\COMPILE\TLINK.EXE X-VESA.OBJ
 if "%1"=="release" goto release
 if not "%1"=="saw" goto standard
 .\utility\SAW\saw.com
-....\COMPILE\apack -x DATA.COM DATA.COM
+..\..\COMPILE\apack -x DATA.COM DATA.COM
 copy CODE.COM + DATA.COM X-VESA.COM /B
 del code.com
 del data.com
 goto end
 :standard
-....\COMPILE\exe2com X-VESA.EXE X-VESA.COM
+..\..\COMPILE\exe2com X-VESA.EXE X-VESA.COM
 goto end
 :release
 .\utility\SAW\saw.com
-....\COMPILE\apack -x DATA.COM DATA.COM
-....\COMPILE\apack -x CODE.COM CODE.COM
+..\..\COMPILE\apack -x DATA.COM DATA.COM
+..\..\COMPILE\apack -x CODE.COM CODE.COM
 copy .\utility\stub\STUB.COM
 .\utility\stub\PREPSTUB.COM
 copy STUB.COM + CODE.COM + DATA.COM X-VESA.COM /B
@@ -855,7 +862,7 @@ del X-VESA.MAP
 del X-VESA.EXE
 del asm.err
 dir X-VESA.*
-copy x-vesa.com a:
+copy x-vesa.com a:\
 :end_end
 ```
 
@@ -865,11 +872,12 @@ was not part of the material reviewed for this document):
 
 ```ini
 [autoexec]
-Lines in this section will be run at startup.
-You can put your MOUNT lines here.
+# Lines in this section will be run at startup.
+# You can put your MOUNT lines here.
+
 SET DOSBOX-X=1
 SET PATH=%PATH%;C:\COMMAND;C:\COMPILE;C:\DIAGS;C:\VC
-mount a b:
-mount c ....\DOS
+mount a b:\
+mount c ..\..\DOS
 call a:\make_prg.bat DOSBOX
 ```
