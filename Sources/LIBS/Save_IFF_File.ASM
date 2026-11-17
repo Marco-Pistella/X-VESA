@@ -103,12 +103,11 @@ read_256_colors:
 	add	si,3h
 	jmp	next_dac_color
 standard_vga_dac:
-	shl	ds: byte ptr [si],2h
-	inc	si
-	shl	ds: byte ptr [si],2h
-	inc	si
-	shl	ds: byte ptr [si],2h
-	inc	si
+	push	ax
+	call	Normalize_VGA_DAC
+	call	Normalize_VGA_DAC
+	call	Normalize_VGA_DAC
+	pop	ax
 next_dac_color:
 	inc	ah
 	jne	loop_get_colors
@@ -215,6 +214,10 @@ no_pad_iff:
 	call	Seek_File
 	jc	exit_file_save_iff
 	mov	eax,ds: dword ptr [iff_write_bytes]
+	test	al,1h
+	je	no_pad_iff_1
+	inc	eax
+no_pad_iff_1:
 	sub	eax,IFF_FORM_LEN
 	call	Swap_32
 	mov	ds: dword ptr [si],eax
@@ -256,4 +259,17 @@ exit_file_save_iff:
 no_sound_ss_done:
 	and	ds: byte ptr [status_flag_3],NOT SCREENSHOT_ON
 	popa
+	ret
+
+Normalize_VGA_DAC:
+	lodsb
+	mov	ah,255d
+	mul	ah
+	mov	dl,63d
+	div	dl
+	cmp	ah,32d
+	jb	no_round_vga_dac
+	inc	ax
+no_round_vga_dac:
+	mov	ds: byte ptr [si-1h],al
 	ret

@@ -70,7 +70,13 @@ go_literal:
 	mov	es: byte ptr [bp],ah
 	mov	bp,di
 	xor	di,di
-	jmp	exec_literal
+exec_literal:
+	mov	es: byte ptr [bx],al
+	inc	bx
+	mov	ah,al
+	inc	dh
+	cmp	dh,127d
+	jmp	entry_max_bytecode
 no_extra_pack:
 	mov	es: byte ptr [bp],dh
 	mov	di,bp
@@ -81,13 +87,6 @@ no_extra_pack:
 	inc	bx
 	mov	ah,al
 	jmp	next_iff_col
-exec_literal:
-	mov	es: byte ptr [bx],al
-	inc	bx
-	mov	ah,al
-	inc	dh
-	cmp	dh,127d
-	jmp	entry_max_bytecode
 exit_next_iff_col:
 	mov	es: byte ptr [bp],dh
 	xchg	ax,bx
