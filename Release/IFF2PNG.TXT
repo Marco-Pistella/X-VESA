@@ -1,0 +1,1373 @@
+                           IFF2PNG V20.7.1
+                          by Marco Pistella
+                         mpistella@libero.it
+
+                          TABLE OF CONTENTS
+
+   1.  Introduction
+       1.1.  What IFF2PNG is
+       1.2.  Features
+       1.3.  The IFF formats and the PNG format
+   2.  How to use IFF2PNG
+       2.1.  Command line syntax
+       2.2.  Compression levels and engine selection
+       2.3.  Block splitting
+       2.4.  Palette de-duplication
+       2.5.  Candidate pruning with -cx
+       2.6.  Tolerant and strict parsing
+       2.7.  The diagnostic log (-v)
+       2.8.  Console output and exit status
+       2.9.  Usage examples
+   3.  Technical details
+       3.1.  Reading the IFF file
+       3.2.  Decoding FORM PBM
+       3.3.  Decoding FORM ILBM
+       3.4.  Per-line palettes (SHAM and CTBL)
+       3.5.  Palette handling
+       3.6.  PNG color depth selection and transparency
+       3.7.  PNG filter selection
+       3.8.  DEFLATE compression
+       3.9.  Multi-block DEFLATE and adaptive splitting
+       3.10. Multithreaded architecture
+       3.11. Memory usage and limits
+   4.  System requirements
+   5.  License
+   6.  Where to find the latest version of IFF2PNG
+   7.  How to contact the author
+   8.  Notes
+       8.1.  Differences from PBM2PNG V19.1
+       8.2.  Changes in V20.7.x
+       8.3.  General notes
+
+
+===========================================================================
+   1. INTRODUCTION
+===========================================================================
+
+   1.1. What IFF2PNG is
+
+   IFF2PNG is a command line converter that transforms graphics files
+   in IFF format -- both the chunky PBM variant and the interleaved
+   planar ILBM variant -- into PNG format. It is the successor of
+   PBM2PNG and, like it, was developed as a support tool for X-VESA:
+   the VESA diagnostic program saves screenshots in IFF-PBM format, a
+   native format from the 1980s not directly readable by most modern
+   PC applications. IFF2PNG fills this gap by producing standard PNG
+   files, compatible with any current viewer, browser or graphics
+   application.
+
+   Unlike PBM2PNG, IFF2PNG is not limited to X-VESA screenshots. It
+   also reads the files produced by the Amiga paint and capture
+   programs of the period: indexed images of 1 to 8 bitplanes, Extra
+   Half-Brite (EHB), HAM6 and HAM8, pictures whose palette changes on
+   every scanline (Sliced HAM, Dynamic Hires, Dynamic HAM), 24-plane
+   deep images and images with a mask plane, which are converted to
+   RGBA PNG.
+
+   IFF2PNG is written in C89/C90 (with a 64-bit integer extension) and
+   has no dependencies on external libraries: the DEFLATE encoder, the
+   CRC-32 and Adler-32 checksums and the PNG writer are all part of the
+   program. The executable prints a banner such as
+
+     IFF2PNG v20.6.5 [Windows x64 Multi-Thread]
+
+   showing the version, the operating system, the CPU architecture
+   and whether the build can compress on multiple threads.
+
+   IFF2PNG compresses its filter candidates in parallel across multiple
+   CPU cores where a threading API is available (Win32 or POSIX).
+   Every candidate is compressed independently, so the number of
+   threads changes how fast the conversion completes, never what it
+   produces.
+
+
+   1.2. Features
+
+   - Reading of FORM PBM and FORM ILBM files with BMHD, CMAP, CAMG and
+     BODY chunks, in big-endian format conforming to the IFF
+     specification, with validation of chunk order, chunk sizes and
+     ByteRun1 packet boundaries.
+
+   - Support for PackBits/ByteRun1 compression (type 1) and
+     uncompressed files (type 0), for both PBM and ILBM.
+
+   - FORM PBM: palettized images at 8 bits per pixel (CMAP required)
+     and true color images at 24 bits per pixel.
+
+   - FORM ILBM: 1 to 8 bitplanes (indexed), Extra Half-Brite (EHB),
+     HAM6, HAM8 and 24-plane deep RGB images (plane 0..7 = red,
+     8..15 = green, 16..23 = blue, least significant bit first).
+
+   - Per-line palettes: SHAM (Sliced HAM) and CTBL (NewTek Dynamic
+     Hires and Dynamic HAM) chunks, which store a 16-color palette for
+     every scanline. The palette of each row is applied before the row
+     is decoded, for indexed, EHB and HAM pictures; the result is a
+     truecolor PNG, or an indexed one when the picture has at most 256
+     colors (section 3.4).
+
+   - Masking support: color-key transparency (masking 2) for PBM and
+     ILBM, emitted as a PNG tRNS chunk; mask plane (masking 1) for
+     ILBM, converted to a per-pixel alpha channel and written as RGBA
+     PNG.
+
+   - Automatic conversion from true color to indexed palette: if the
+     24-bit image (PBM 24-bit, 24-plane ILBM, or the RGB result of a
+     HAM or per-line palette decode) contains at most 256 distinct
+     colors, IFF2PNG converts it to an indexed PNG, significantly
+     reducing the output file size. The transparent color, if present,
+     is carried over to the new palette.
+
+   - Automatic PNG color depth selection based on the number of
+     colors actually used: 1 bit (up to 2 colors), 2 bits (up to 4
+     colors), 4 bits (up to 16 colors), 8 bits (up to 256 colors).
+     Pixel packing at 1, 2 and 4 bits is performed internally.
+
+   - Palette compaction: the PLTE chunk contains only the colors that
+     the image really uses, so a 256-entry CMAP with five colors in
+     use produces a 5-entry PLTE.
+
+   - Palette de-duplication: if the palette entries in use contain
+     duplicate RGB values, IFF2PNG builds two candidates (with and
+     without merging the duplicates), compares them with a fast probe
+     and keeps the smaller one. Can be disabled (-ndedup) or forced
+     (-fdedup).
+
+   - Palette ordering optimization for images with at most 16 colors:
+     IFF2PNG reorders the palette to minimize index variations between
+     adjacent pixels, improving the efficiency of PNG filters and
+     subsequent DEFLATE compression (adjacency matrix on horizontally
+     contiguous pixels, greedy path construction from every start
+     color and 2-opt refinement).
+
+   - Whole-image filter competition: rather than committing to a
+     single filtering strategy, IFF2PNG fully DEFLATE-compresses
+     several candidate filterings of the same image -- per-row
+     adaptive selection, and fixed None and Up filters applied
+     uniformly (plus fixed Sub and Paeth when the PNG depth is above
+     2 bits) -- and keeps the candidate that produced the smallest
+     real compressed output. Candidates that reduce to byte-identical
+     filtered data are detected and compressed only once.
+
+   - Two selectable DEFLATE parsers:
+       . a fast two-pass lazy-matching LZ77 parser with configurable
+         hash-chain search depth (-c1 to -c4);
+       . a dynamic-programming shortest-path parser (-cx) that
+         searches the token graph using estimated Huffman bit costs,
+         instead of a greedy/lazy decision at each position.
+
+   - Candidate pruning with -cx: on large images a cheap fast-engine
+     pre-pass discards the filter candidates that are clearly worse,
+     so that the expensive DP parser runs only where it can matter.
+     Can be disabled with -nprune.
+
+   - Huffman tables built with the Package-Merge algorithm for
+     length-limited canonical prefix codes (max 15 bits for the
+     literal/length and distance alphabets, max 7 bits for the code-
+     length alphabet), with an explicit Kraft-McMillan verification
+     on every table built.
+
+   - Adaptive multi-block DEFLATE partitioning: the token stream can
+     be split into several independently Huffman-coded blocks (up to
+     8). Each block is written with a dynamic Huffman table or, when
+     it is shorter, with the fixed Huffman code of RFC 1951. Splitting
+     can be disabled with -nbs.
+
+   - Automatic stored-block (BTYPE=00) fallback: if the whole dynamic
+     stream would be larger than an uncompressed zlib stream, IFF2PNG
+     writes the uncompressed stream instead, as allowed by RFC 1951.
+
+   - Tolerant parsing of three common writer quirks, each reported as a
+     warning, and a -strict mode that turns all of them into errors
+     (see section 2.6).
+
+   - Multithreaded compression: on Win32/Win64 and on POSIX systems
+     each distinct filter candidate is compressed on its own thread;
+     on platforms without a supported threading API the same
+     algorithms run sequentially with identical results.
+
+   - Optional diagnostic log (-v) with the details of the input file,
+     the decode path, the palette, the PNG produced, the filters, the
+     compression and the timing.
+
+   - PNG file writing conforming to the specification, with IHDR,
+     PLTE (for indexed images), tRNS (when transparency is present),
+     a single IDAT and IEND chunk, CRC-32 for each chunk and Adler-32
+     in the zlib stream.
+
+
+   1.3. The IFF formats and the PNG format
+
+   The IFF (Interchange File Format) was developed by Electronic Arts
+   and Commodore in the 1980s for the Amiga platform. A bitmap is
+   stored as a FORM container holding a sequence of chunks identified
+   by four bytes: BMHD (header with resolution, color depth, masking
+   and compression type), CMAP (RGB palette), CAMG (Amiga display mode
+   flags, ILBM only) and BODY (image data, optionally compressed with
+   PackBits/ByteRun1). All multi-byte values are in big-endian format.
+
+   Two image layouts are accepted:
+
+   - PBM (Packed BitMap): chunky layout, one byte per pixel (8 bit
+     indexed) or three bytes per pixel (24 bit RGB). This is the
+     format written by X-VESA.
+
+   - ILBM (InterLeaved BitMap): planar layout. Each scanline is stored
+     as a sequence of bitplanes, each plane padded to a 16-bit word
+     boundary, optionally followed by a mask plane. This is the
+     classic Amiga format and the one used by HAM and EHB images.
+
+   X-VESA uses the IFF-PBM format for its screenshots because its
+   structure is straightforward to generate entirely in assembly
+   language, without dependencies on external libraries, and is
+   compatible with the Amiga viewers of the era for which the program
+   is designed.
+
+   The PNG (Portable Network Graphics) format is the de facto open
+   standard for lossless raster graphics on PC and on the web. It is
+   natively supported by all modern browsers, operating systems and
+   graphics applications, and is therefore the natural format for
+   making IFF images accessible to a wide audience.
+
+
+===========================================================================
+   2. HOW TO USE IFF2PNG
+===========================================================================
+
+   2.1. Command line syntax
+
+   IFF2PNG <IN.IFF> <OUT.PNG> [-c1..-c4] [-cx] [-nbs] [-ndedup]
+           [-fdedup] [-nprune] [-strict] [-v]
+
+   IN.IFF       Source file in IFF format (FORM PBM or FORM ILBM).
+                The file name extension is not checked.
+   OUT.PNG      Destination file in PNG format. An existing file is
+                overwritten.
+   [option]     Any combination of the options below.
+
+   Parameters can be specified in any order. The input file and the
+   output file are identified as the first two arguments that do not
+   begin with the '-' character. If either file is missing, IFF2PNG
+   displays the syntax and exits. A third argument that does not begin
+   with '-' is rejected, and so is any unknown option.
+
+   Options are matched exactly and are case sensitive. If more than one
+   of -c1..-c4 is given, the last one wins. The options -ndedup and
+   -fdedup are mutually exclusive.
+
+   In case of error reading the input file (file not found,
+   unrecognized format, missing BMHD or BODY chunks, invalid chunk
+   ordering or size, invalid resolution, unsupported depth or masking,
+   illegal palette index, malformed ByteRun1 data) IFF2PNG reports the
+   specific problem on stderr and exits without producing output.
+
+   Summary of the options:
+
+     -c1 .. -c4   Chain search depth of the DEFLATE parser (2.2).
+     -cx          Dynamic-programming parser (2.2).
+     -nbs         Disable DEFLATE block splitting (2.3).
+     -ndedup      Disable palette de-duplication (2.4).
+     -fdedup      Force palette de-duplication (2.4).
+     -nprune      With -cx, do not prune filter candidates (2.5).
+     -strict      Follow the IFF standard to the letter (2.6).
+     -v           Write a diagnostic log file (2.7).
+
+
+   2.2. Compression levels and engine selection
+
+   -c1    Search depth 4,096 positions.
+          Fastest compression, larger file size.
+
+   -c2    Search depth 8,192 positions.
+
+   -c3    Search depth 16,384 positions.
+
+   -c4    Search depth 32,768 positions (default).
+          Slowest of the two-pass engine's levels, minimum file size
+          among -c1..-c4.
+
+   -cx    Ultra mode: replaces the two-pass lazy matcher with a
+          dynamic-programming (DP) parser that computes, for every
+          position of the data, the cheapest way of reaching it with a
+          literal or a match, using estimated Huffman bit costs, and
+          then follows the cheapest path back from the end. Produces
+          the smallest output IFF2PNG is capable of, at a
+          significantly higher CPU cost. -cx can be combined with
+          -c1..-c4: the chain-search depth then bounds the DP
+          matcher's candidate search rather than the lazy matcher's
+          (without an explicit level the depth is 32,768).
+
+   The default level -c4 offers the best compression among the fast
+   engine's levels and is suitable for typical use. Lower levels are
+   useful when converting large numbers of files on slow systems.
+   -cx is recommended when file size matters more than conversion
+   time, for example for a screenshot meant for permanent archival
+   or publication.
+
+   -cx is a cost-model search, not a proof of optimality: the cost
+   it minimizes is the sum of the estimated code lengths and extra
+   bits of the tokens, without the block headers and without the
+   effect of block splitting, and the match search relaxes only the
+   lengths that are longer than the best length already seen at a
+   position (see section 3.8). The gap between -c4 and -cx is usually
+   small for the typical images generated by X-VESA, but it is not
+   guaranteed to be, and the result of -cx is not guaranteed to be
+   smaller than the result of -c4 on every image.
+
+
+   2.3. Block splitting
+
+   Block splitting is enabled by default. IFF2PNG looks for genuine
+   statistical changes in the compressed token stream -- for example
+   the boundary between a text panel and a flat-colored border -- and,
+   where beneficial, encodes the regions on either side as separate
+   Huffman blocks within the same IDAT stream. See section 3.9.
+
+   -nbs   Disables block splitting: the whole image is encoded as a
+          single block (dynamic Huffman, or fixed Huffman if that is
+          shorter). The option also applies to the size probe used by
+          palette de-duplication.
+
+   Each split is accepted only if the modelled cost of the two blocks
+   is lower than the cost of the single block by more than 16 bits.
+   Whether block splitting improves on -nbs for a specific image
+   depends on its content and is best judged by comparing the two on
+   the actual file. The search is a heuristic and does not find a
+   global optimum.
+
+   Note: PBM2PNG had an explicit -bs option. IFF2PNG does not: block
+   splitting is the default and only -nbs exists. A command line that
+   contains -bs is rejected with "Unknown option".
+
+
+   2.4. Palette de-duplication
+
+   Some programs write palettes in which several entries have the same
+   RGB value, so that two visually identical areas of the image use
+   different indices. Merging such entries can reduce the number of
+   colors, lower the PNG bit depth and make the index stream more
+   regular. It can also make the file larger, because it changes the
+   data that DEFLATE has to compress. IFF2PNG therefore decides by
+   measurement.
+
+   (default)  If two palette entries that the image really uses have
+              the same RGB value, two candidates are built -- with and
+              without merging -- and each one is compressed with the
+              fast engine (adaptive filtering, chain limit 4,096,
+              whatever -c1..-c4 and -cx are set to). The candidate
+              with the smaller IDAT + PLTE + tRNS total is kept.
+              If there are no duplicates among the entries in use, or
+              the merge would not reduce the number of colors, the
+              comparison is skipped.
+
+   -ndedup    The comparison is not performed and duplicate entries are
+              never merged.
+
+   -fdedup    The merge is applied without any size comparison.
+
+   The transparent index of an image with color-key transparency
+   (masking 2) is never merged with another entry. Images that were
+   reduced from true color to indexed by IFF2PNG have a palette that is
+   unique by construction, so no de-duplication is needed for them.
+
+
+   2.5. Candidate pruning with -cx
+
+   The DP parser is several times slower than the fast engine, and it
+   is run once for every distinct filter candidate. To limit the cost,
+   when -cx is selected and the filtered scanlines of the image are at
+   least 128 KiB, IFF2PNG first compresses every distinct candidate
+   with the fast engine (chain limit 64, no block splitting; about 5%
+   of the cost of a DP run). The candidates whose fast size is more
+   than 8% larger than the best fast size do not go on to the DP
+   parser: they keep their fast stream as their result and still take
+   part in the final selection. At least three distinct candidates
+   are required for pruning to be active.
+
+   -nprune  Disables the pre-pass: the DP parser is run on every
+            distinct candidate (exhaustive, slower).
+
+   Pruning has no effect without -cx, on small images, or when fewer
+   than three distinct candidates exist.
+
+
+   2.6. Tolerant and strict parsing
+
+   By default the FORM parser is tolerant: three common writer quirks
+   are accepted. Each one is reported with a warning on stderr.
+
+   - X-VESA last-chunk pad: the FORM size excludes the pad byte of the
+     last odd-sized chunk, but exactly one byte follows the FORM at
+     the end of the file. Accepted only if the chunk ends exactly at
+     the end of the FORM and the file is exactly one byte longer. Any
+     pad value is accepted; the value is always reported, and a
+     non-zero value is flagged.
+
+   - BODY size includes the pad byte: when the ByteRun1 stream has an
+     odd length, some writers include the pad byte in the BODY size.
+     Accepted when exactly one byte remains after a complete decode
+     (ILBM and PBM). Any value is accepted; a non-zero value is
+     flagged.
+
+   - Masking 1 without mask plane: an uncompressed ILBM that declares
+     masking 1 but whose BODY size matches the colour planes only is
+     accepted as masking 0.
+
+   -strict  Follows the IFF standard to the letter: all three
+            conditions are hard errors. When one of the first two
+            quirks is rejected, the error message notes that it is
+            tolerated by default.
+
+   The three tolerances are deferred warnings: they are printed after
+   the progress line, so that they never interleave with it. On an
+   error, they are printed before the error message. Other warnings
+   (for instance the heuristics of section 3.3) are printed as soon as
+   they are detected. The assumptions made on files without a CAMG
+   chunk (HAM6, EHB and SHAM) and the anomalies of SHAM and CTBL chunks
+   (section 3.4) do not depend on -strict.
+
+
+   2.7. The diagnostic log (-v)
+
+   -v  Writes a diagnostic log file. The name of the log is the input
+       path with its extension replaced by ".log" (INPUT.IFF produces
+       INPUT.log; a name with no extension gets ".log" appended). The
+       log is written after a successful conversion; a failure to
+       create it is reported as a warning and does not affect the
+       conversion.
+
+   The log has format version 1.0. The first lines are the banner and
+   the title; then follow the sections:
+
+     [0] INVOCATION   Command line as received, compression engine,
+                      chain limit, block splitting, de-duplication
+                      mode, pruning, parser mode (tolerant/strict),
+                      probe parameters, OS, architecture, threading.
+     [1] INPUT FILE   Input and output names, file and FORM sizes,
+                      trailing bytes, IFF type (PBM/ILBM), chunk
+                      inventory with sizes, non-standard chunks
+                      (with the name of the format or program when
+                      known: DPXT, CTBL, SHAM, PCHG, DYCP, CRNG).
+     [2] IMAGE HEADER Dimensions, source depth, IFF compression, BMHD
+                      flags, masking declared and effective,
+                      transparent color index, CAMG presence, value and
+                      decoded flags (a junk high word is reported),
+                      display flags (HIRES, LACE), color
+                      interpretation (indexed, EHB, HAM6, HAM8, deep
+                      RGB, RGBA and per-line palette variants).
+     [3] PALETTE      CMAP entries as stored, palette bit depth, 4-bit
+                      heuristic status, EHB expansion, indices in use,
+                      unique RGB colors, de-duplication mode, result
+                      and outcome, final palette entries, palette
+                      reordering.
+     [4] DECODE PATH  Decode branch, auto-detections applied (HAM6 or
+                      EHB without CAMG, 4-bit CMAP), fallbacks applied
+                      (masking 1 -> 0, color-key dropped), 24-to-8
+                      quantization, index validation, color-key
+                      resolution, per-line palettes (SHAM or CTBL
+                      used, palettes stored, image rows covered,
+                      interlace skip, every warning issued about the
+                      chunks; or why they were not applied).
+     [5] PNG OUTPUT   Internal format, PNG color type and depth,
+                      palette entries, pixels, size of the PNG file and
+                      of each chunk, ratios against the raw pixels and
+                      against the IFF FORM.
+     [6] FILTERING    Winning strategy, scanlines per filter type,
+                      most frequent filter, number of distinct
+                      candidates compressed, number of candidates
+                      pruned.
+     [7] COMPRESSION  Engine, chain limit, bytes given to DEFLATE,
+                      tokens, literals, matches, match coverage,
+                      average and maximum match, block splitting
+                      figures (candidate points evaluated, splits
+                      accepted, final blocks, single-block size, split
+                      total, gain), Huffman symbol counts and maximum
+                      code lengths. The figures refer to the candidate
+                      that was selected.
+     [8] TIMING       Time spent in IFF parse+decode, palette analysis,
+                      filtering, LZ77 + DEFLATE and PNG assembly,
+                      with percentages, and the total.
+     [9] TOLERANCES   Parser mode and the state of each tolerance
+                      (X-VESA pad, BODY pad, masking fallback, with
+                      file offsets and pad values), CAMG junk.
+     [SUMMARY]        A short recapitulation of the conversion.
+
+   The log is intended for diagnosing unusual files and for comparing
+   the effect of the options on a given image. V20.7.0 added the
+   display flags line to [2] and the per-line palette lines to [4],
+   V20.7.1 the per-line palette notes line; the rest of the format is
+   unchanged.
+
+
+   2.8. Console output and exit status
+
+   IFF2PNG first prints the banner. During compression, if the
+   standard output is a terminal, a progress bar is drawn and updated
+   on a single line:
+
+     Compressing: [=============>          ]  54%
+
+   When the PNG file has been written the bar is completed and the line
+   ends with the elapsed time, for example "100% - Time elapsed: 1.23
+   seconds". If the standard output is redirected to a file
+   or a pipe the bar is not drawn and a single line
+
+     Compressing: done - Time elapsed: 1.23 seconds
+
+   is printed instead. Warnings and errors are written on stderr.
+
+   The exit status is 0 when the PNG file was written and 1 in every
+   other case (wrong arguments, unreadable or invalid input, out of
+   memory, workspace limit exceeded, thread creation failure, write
+   failure or disk full while writing the output).
+
+
+   2.9. Usage examples
+
+   Simple conversion with default settings (-c4, block splitting on):
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG
+
+   Conversion with minimum compression level (maximum speed):
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG -c1
+
+   Conversion with the dynamic-programming parser, for the smallest
+   possible file:
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG -cx
+
+   Conversion with block splitting disabled:
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG -c4 -nbs
+
+   -cx without candidate pruning, with a diagnostic log:
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG -cx -nprune -v
+
+   Conversion of a Sliced HAM or Dynamic Hires picture (the SHAM and
+   CTBL chunks are recognized automatically; the log tells how the
+   per-line palettes were applied):
+
+     IFF2PNG DYNHIRES.IFF DYNHIRES.PNG -cx -v
+
+   Strict parsing of a file that must follow the IFF standard:
+
+     IFF2PNG FILE0001.IFF FILE0001.PNG -strict
+
+   Under Windows it is possible to convert all IFF files in the
+   current directory via a batch file:
+
+     FOR %%F IN (*.IFF) DO IFF2PNG %%F %%~nF.PNG -cx
+
+   Under a Unix shell:
+
+     for f in *.iff; do iff2png "$f" "${f%.iff}.png" -cx; done
+
+
+===========================================================================
+   3. TECHNICAL DETAILS
+===========================================================================
+
+   3.1. Reading the IFF file
+
+   IFF2PNG reads the entire file into memory (files larger than 4 GiB
+   are refused) and parses its chunk structure. The presence of the
+   FORM header with type PBM or ILBM is verified; any other type is
+   rejected. The size declared in the FORM header must be at least 4
+   and must fit in the file.
+
+   Chunks are read in sequence from offset 12 up to the end of the
+   FORM. Only BMHD, CMAP, CAMG, BODY, SHAM and CTBL are interpreted;
+   every other chunk is skipped. BMHD, CMAP, CAMG and BODY are each
+   rejected if duplicated or found out of the order required by the IFF
+   specification (CMAP, CAMG and BODY may not precede BMHD; BMHD, CMAP
+   and CAMG may not follow BODY). A chunk whose declared size exceeds
+   the space left in the FORM is reported as truncated. Word padding
+   (the alignment byte for odd-size chunks) is handled correctly; a
+   missing pad byte is an error, except for the X-VESA quirk of section
+   2.6. Bytes left inside the FORM that do not make up a chunk are
+   treated as a corrupt file rather than silently ignored. Bytes after
+   the end of the FORM (for example a container wrapper or appended
+   metadata) are ignored.
+
+   SHAM and CTBL (section 3.4) are not part of the IFF standard, so an
+   unexpected one is never an error: a duplicate is ignored (the first
+   one is kept) and one that follows BODY is ignored, each with a
+   warning. Their position relative to BMHD and CMAP does not matter.
+
+   From the BMHD chunk (at least 20 bytes) the following are
+   extracted: width and height (16 bit each), number of bitplanes or
+   color depth, masking, compression type, the Flags byte and the
+   transparent color index. Bit 7 of the Flags byte is BMHDF_CMAPOK:
+   the writer declares an intentional 8 bit per channel CMAP (see
+   section 3.3). A width or height of zero, or the absence of BODY,
+   is reported as an incomplete file.
+
+   The accepted values are:
+
+     FORM PBM    depth 8 or 24; masking 0 or 2.
+                 Masking 1 (stencil plane) is not supported in PBM.
+     FORM ILBM   depth 1..8 or 24; masking 0, 1 or 2.
+     Both        compression 0 (none) or 1 (ByteRun1).
+
+   The CMAP chunk must be 3 to 768 bytes long and a multiple of 3
+   (1 to 256 colors). The CAMG chunk (ILBM only) must be at least 4
+   bytes long; if its high word is non-zero while EXTENDED_MODE
+   (bit 12) is clear, a warning is printed ("possible junk") and the
+   EHB (0x80) and HAM (0x800) bits of the low word are still honoured.
+   The CAMG value is ignored for PBM.
+
+   After the BODY is decoded, every pixel index of an indexed image is
+   checked against the number of colors in the CMAP. An index that has
+   no color is reported with its pixel position.
+
+
+   3.2. Decoding FORM PBM
+
+   For 8-bit images the IFF row is the width rounded up to the next
+   multiple of 2. For 24-bit images the IFF row is w * 3 bytes, also
+   rounded up to an even number of bytes. The padding bytes are read
+   but never transferred to the image.
+
+   Uncompressed BODY: its size must be exactly the row size times the
+   height; any difference is an error.
+
+   ByteRun1 BODY: the decoder reads packets until each row is
+   complete. A control byte 0..127 introduces a literal run of
+   (control + 1) bytes; 129..255 introduces a repeat of the next byte
+   (257 - control) times; 128 is a no-operation. A packet is checked
+   against the declared BODY size and against the remaining width of
+   the current row, so a packet that crosses the end of a row, a
+   truncated stream or a row that does not complete are reported as
+   errors rather than read out of bounds. If one single byte remains
+   after the last row it is treated as the pad byte of section 2.6.
+   Any other leftover data is an error.
+
+   An 8-bit PBM must have a CMAP. A 24-bit PBM does not need one,
+   except when it declares color-key transparency (see 3.6).
+
+
+   3.3. Decoding FORM ILBM
+
+   Planar geometry. Each plane of a scanline is word-aligned
+   (ceil(width / 16) * 2 bytes). The BODY holds, for each scanline,
+   the color planes 0..n-1 followed by the mask plane when masking is
+   1. With ByteRun1 each plane row is decoded separately and must
+   produce exactly one plane row of data; a NOP packet (128) is
+   skipped. For an uncompressed BODY the size must match the planar
+   size exactly (with the masking-1 exception of section 2.6).
+
+   Indexed images (1 to 8 planes). The planes are combined into one
+   index per pixel (plane 0 is the least significant bit) and the
+   indices are validated against the CMAP (with a SHAM or CTBL chunk,
+   also against the 16 registers that the table defines, section 3.4).
+
+   CMAP expansion. Old writers store a 4-bit palette in the high
+   nibble of each byte. For ILBM with at most 6 planes, if every
+   component has its low nibble clear and at least one is non-zero,
+   the palette is expanded by nibble replication (0xA0 becomes 0xAA)
+   and a warning is printed. The expansion is skipped when BMHD
+   Flags bit 7 (BMHDF_CMAPOK) is set. It is never applied to PBM, to
+   7- and 8-plane ILBM (AGA, 8-bit palettes) or to 24-plane ILBM.
+
+   Extra Half-Brite (EHB). Indicated by CAMG bit 0x80. IFF2PNG uses
+   at most the first 32 CMAP entries, builds entries 32..63 as the
+   same colors with each component shifted right by one, and accepts
+   indices in the second half only where the corresponding base color
+   exists. EHB with more than 6 planes is rejected. A CMAP with more
+   than 32 entries produces a warning.
+
+   HAM. Indicated by CAMG bit 0x800; only 6 planes (HAM6) and 8 planes
+   (HAM8) are accepted. Each pixel value is split into a control field
+   and a data field: 4 data bits in HAM6, 6 in HAM8. Control 00 takes
+   the color from the palette; 01 modifies blue, 10 modifies red and 11
+   modifies green, keeping the other two components of the previous
+   pixel. At the start of every scanline the held color is palette
+   entry 0. A modified component is the data value expanded to 8 bits
+   by bit replication (HAM6: value * 17; HAM8: (value << 2) | (value >>
+   4)). A palette reference outside the real colors of the CMAP is an
+   error. If the CMAP has fewer entries than the nominal base (16 for
+   HAM6, 64 for HAM8, 32 for HAM8 + EHB), a warning is printed. The
+   result is a true color image; the palette is discarded. With a SHAM
+   or CTBL chunk the base palette changes on every row (section 3.4).
+   If both the HAM and EHB flags are set, the EHB-expanded palette is
+   used as the HAM base (this is IFF2PNG's own interpretation of the
+   combination).
+
+   Files without CAMG. An ILBM with 6 planes, no CAMG chunk and a CMAP
+   of 1 to 16 entries is decoded as HAM6, as suggested by the ILBM
+   specification, with a warning. An ILBM with 6 planes, no CAMG chunk
+   and exactly 32 CMAP entries is decoded as EHB, with a warning. With
+   any other CMAP size such a file is a plain indexed image (unless it
+   has a SHAM chunk, see below), as is any other depth without CAMG. A
+   6-plane ILBM without CAMG that has a SHAM chunk, and that the CMAP
+   rules above did not classify (no CMAP, or more than 16 entries that
+   are not the 32 of EHB), is decoded as HAM6 with a warning, because
+   SHAM means Sliced HAM. These assumptions are heuristics and do not
+   depend on -strict.
+
+   Deep ILBM (24 planes). Planes 0..7 are the red bits, 8..15 the
+   green bits and 16..23 the blue bits, least significant first. No
+   palette is needed; with masking 2 the CMAP is kept only to resolve
+   the transparent color.
+
+   Mask plane (masking 1). The mask plane is read as alpha: a set bit
+   gives 255, a clear bit gives 0. The image is then written as RGBA
+   (PNG color type 6, 8 bits per channel). An indexed or EHB image
+   with a mask plane is converted to RGB through its palette first;
+   the validity of every index is verified. HAM and deep images with a
+   mask plane are also written as RGBA. RGBA images are never
+   converted to indexed and have no PLTE or tRNS chunk.
+
+   Color-key transparency (masking 2) is ignored with a warning for HAM
+   output (the HAM colors are computed, so the key index has no
+   meaning) and for per-line palette output (section 3.4).
+
+
+   3.4. Per-line palettes (SHAM and CTBL)
+
+   Some Amiga programs change the color registers while the screen is
+   being drawn, so that every scanline can have its own palette. Two
+   IFF extensions store these palettes in an extra chunk, and IFF2PNG
+   decodes both:
+
+   - SHAM (Sliced HAM): a palette for every scanline of a HAM picture,
+     normally HAM6.
+
+   - CTBL (NewTek): a palette for every scanline of a Dynamic Hires
+     picture (hires, normally 4 bitplanes) or of a Dynamic HAM
+     picture.
+
+   Neither chunk belongs to the IFF standard and there is no official
+   specification: IFF2PNG follows the layout used by the common Amiga
+   picture converters. The chunks are recognized automatically; no
+   option is needed.
+
+   Chunk layout. A palette is 16 colors of one big-endian word each,
+   0000RRRRGGGGBBBB (4 bits per component, as in the OCS hardware
+   palette), that is 32 bytes. IFF2PNG scales every component to 8
+   bits by multiplying it by 17 (0x0F becomes 0xFF).
+
+     CTBL   The palettes, one per scanline, without any header. Rows
+            are never skipped, not even on an interlaced picture.
+     SHAM   A version word (0) followed by the palettes. On an
+            interlaced picture (CAMG LACE flag, 0x4) there is one
+            palette for every two scanlines: an even row y loads
+            palette y/2 and an odd row keeps the palette of the row
+            above. Otherwise there is one palette per row.
+
+   Application. Before each row is decoded, the palette stored for that
+   row replaces color registers 0..15 (all of them, entry 0 included).
+   Registers 16 and above keep their CMAP value. With EHB the
+   half-bright registers 32..47 are derived again from the new
+   registers 0..15, while registers 16..31 and their half-bright copies
+   48..63 keep the values of the CMAP. A row that has no palette in the
+   table (the table is shorter than the picture) keeps the palette of
+   the previous row. The CMAP only supplies the registers that the
+   table does not define, so it is optional when the pixels use
+   registers 0..15.
+
+   - Indexed pictures (1 to 8 planes, including Dynamic Hires): every
+     pixel index is replaced by the color it has in its own row. An
+     index is valid if it is below the number of CMAP entries or
+     below 16, whichever is greater (with EHB, the usual EHB rule for
+     the second half of the registers applies). An invalid index
+     stops the conversion with "Pixel at N references color index X,
+     but only M palette colors are defined (CMAP + SHAM)".
+
+   - HAM pictures (HAM6 and HAM8): the HAM decode of section 3.3 uses
+     the palette of the row for its base colors, and the held color at
+     the start of each row is entry 0 of that palette. As in a plain
+     HAM picture, a code-0 pixel whose index has no color is an error.
+     HAM6 has a base of 16 colors; HAM8 has 64, of which the table
+     redefines the first 16. That CTBL defines only 16 registers also
+     for HAM8 is an assumption: no authoritative description of Dynamic
+     HAM8 was found, so a HAM8 picture needs a CMAP of 64 entries for
+     the other registers.
+
+   Mode selection. The picture is treated as HAM, EHB or indexed
+   according to its CAMG chunk, exactly as without per-line palettes,
+   and a SHAM chunk does not change that: if the CAMG declares neither
+   HAM nor EHB, the picture is decoded as an indexed picture with
+   per-line palettes, and a warning says so. Only when there is no
+   CAMG at all is a 6-plane picture with a SHAM chunk assumed to be
+   HAM6 (section 3.3).
+
+   Output. The picture is decoded to 24-bit RGB (32-bit RGBA when it
+   has a mask plane, masking 1) and then follows the normal pipeline:
+   with at most 256 distinct colors it is reduced to an indexed PNG
+   (section 3.5), otherwise it is written as a truecolor PNG. Sliced
+   HAM and Dynamic Hires pictures usually have far more than 256
+   colors, so they normally come out as truecolor. Color-key
+   transparency (masking 2) is ignored with a warning, because the
+   transparent index has no fixed color; a mask plane is honored.
+
+   Anomalies. A damaged or unexpected SHAM or CTBL chunk is never an
+   error and -strict does not change that: the problem is reported
+   with a warning and the picture is decoded as well as possible.
+
+     - A CTBL chunk shorter than 32 bytes, or a SHAM chunk shorter
+       than 34, is ignored: the picture is decoded with its CMAP.
+     - Trailing bytes that do not make a whole palette are ignored.
+     - A SHAM version other than 0 is decoded as version 0.
+     - If both chunks are present, CTBL is used.
+     - A duplicate chunk is ignored (the first one is used), and so
+       is a chunk that follows BODY.
+     - A table with fewer palettes than rows: the remaining rows keep
+       the last palette (the warning gives the number of rows covered).
+     - In FORM PBM and in 24-plane ILBM the chunks are ignored,
+       because there is no palette to change.
+
+   Not interpreted. The NewTek DYCP chunk is listed by the -v log but
+   its content is not used. The PCHG chunk (palette changes defined by
+   line) is not supported: it is skipped like any other unknown chunk,
+   and the picture is decoded with its CMAP only.
+
+   With -v the log reports, in section [4], which chunk was applied,
+   how many palettes it holds, how many image rows they cover and
+   whether the interlace rule was used, and every warning issued about
+   the chunks, also when the chunk was applied; if a SHAM or CTBL chunk
+   was present but not applied, the reason is given.
+
+
+
+   3.5. Palette handling
+
+   All images that end up with 256 or fewer distinct colors are
+   written as indexed PNG files. The steps are the following.
+
+   Reduction from true color. A 24-bit image (PBM 24-bit, deep ILBM,
+   the RGB result of a HAM decode, or the RGB result of a per-line
+   palette decode) is scanned with a hash table of its colors. If the
+   image contains no more than 256 distinct colors, a palette is built
+   and the pixels are replaced by indices; otherwise the scan stops at
+   the 257th color and the image stays true color. The palette produced
+   this way is unique by construction.
+
+   Palette compaction. The palette is rewritten so that it contains
+   only the colors used by the image. For example, five colors in use
+   give a 15-byte PLTE chunk. Pixel indices are remapped to
+   0..(colors - 1). With more than 16 colors the colors keep their
+   original relative order (ascending original index).
+
+   Ordering of small palettes. For indexed images with at most 16
+   colors in use IFF2PNG chooses the order of the palette in order to
+   minimize the index differences between horizontally adjacent
+   pixels. More similar adjacent indices produce lower-value filtered
+   bytes, improving DEFLATE compression efficiency.
+
+   - With 1 or 2 colors, the more frequent color goes first.
+
+   - With 3 to 16 colors, the algorithm builds an adjacency matrix
+     over the colors in use: for each pair of horizontally adjacent
+     pixels (never across the end of a row) the counter of the pair is
+     incremented. Finding the best order is equivalent to a
+     travelling-salesman problem on the adjacency graph, which
+     IFF2PNG solves heuristically:
+
+       . one starting color for each color in use, in decreasing order
+         of frequency;
+       . for each starting color, a greedy path that at each step goes
+         to the unvisited color with the highest value of
+         (adjacencies with the current color) - 5 * (difference
+         between the original indices of the two colors), so that
+         colors close in the original index are favored;
+       . 2-opt optimization: for each pair of edges in the path, it is
+         evaluated whether reversing the intermediate segment
+         improves the total score; if so, the reversal is applied;
+       . among all the paths, the one with the highest total score
+         gives the new order.
+
+   The reordering does not modify the visual content of the image:
+   pixel indices are remapped consistently with the new palette order,
+   and the transparent color index, if any, is remapped along with it.
+
+   De-duplication of identical colors takes place before compaction
+   and ordering (see section 2.4).
+
+
+   3.6. PNG color depth selection and transparency
+
+   IFF2PNG automatically selects the output PNG format based on the
+   number of unique colors present in the image:
+
+     Up to   2 colors  ->  1 bit per pixel, indexed
+     Up to   4 colors  ->  2 bits per pixel, indexed
+     Up to  16 colors  ->  4 bits per pixel, indexed
+     Up to 256 colors  ->  8 bits per pixel, indexed
+     More than 256     ->  24 bits per pixel (true color, no palette)
+     Mask plane        ->  32 bits per pixel (RGBA, no palette)
+
+   The number of colors is counted after the optional merge of
+   duplicate entries. For depths below 8 bits, IFF2PNG performs pixel
+   packing: multiple palette indices are compacted into each byte,
+   with the leftmost pixel in the most significant bits, in
+   conformance with the PNG specification. Each scanline starts on a
+   byte boundary. The PNG color type is 3 for indexed images, 2 for
+   true color and 6 for RGBA; interlacing is never used.
+
+   Color-key transparency (masking 2). IFF2PNG tracks the declared
+   transparent color through every conversion step -- 24-to-8-bit
+   palette construction, merging, compaction and ordering -- and emits
+   it as a PNG tRNS chunk.
+
+   - Indexed images: the tRNS chunk has one entry for each index up to
+     the final index of the transparent color: 255 (opaque) for the
+     preceding ones, 0 (fully transparent) for the transparent one.
+     If no pixel of the image uses the transparent index, no tRNS
+     chunk is emitted.
+
+   - 24-bit images reduced to indexed: the transparent color is looked
+     up in the CMAP and then in the new palette. If the CMAP is
+     missing or too short, or if the color does not occur in the
+     image, a warning is printed, the transparency is dropped and the
+     image is converted without tRNS rather than marking the wrong
+     color as transparent.
+
+   - True color images that stay true color (more than 256 colors): the
+     tRNS chunk carries the RGB value of the CMAP entry that the
+     BMHD points to. A valid CMAP entry is required; without it the
+     conversion stops with an error.
+
+   - HAM output and per-line palette output: transparency is ignored
+     (warning).
+
+   - Mask plane (masking 1): see section 3.3; the alpha channel carries
+     the transparency.
+
+
+   3.7. PNG filter selection
+
+   IFF2PNG separates filter selection into two levels: a fast per-row
+   heuristic, and a whole-image competition between complete
+   filtering strategies, decided by actual compressed size rather
+   than by heuristic estimate alone.
+
+   At the per-row level, IFF2PNG evaluates the five filters defined
+   by the PNG specification:
+
+     Filter 0 (None)     No transformation.
+     Filter 1 (Sub)      Difference with the pixel to the left.
+     Filter 2 (Up)       Difference with the pixel in the row above.
+     Filter 3 (Average)  Difference with the average of the pixel to
+                         the left and the one above.
+     Filter 4 (Paeth)    Paeth predictor based on three neighboring
+                         pixels.
+
+   The distance to the "pixel to the left" is 1 byte for indexed
+   images (including the packed 1, 2 and 4 bit depths), 3 bytes for
+   RGB and 4 bytes for RGBA.
+
+   For each filter the sum of the absolute values of the resulting
+   bytes (read as signed 8-bit values) is calculated, used as an
+   estimate of the compression cost. Three heuristic corrections are
+   applied, as integer percentages. They compound when more than one
+   applies:
+
+   - Filter None receives a penalty weight (88/100), to compensate for
+     its tendency to be falsely favored by the absolute sum metric.
+   - The filter selected in the previous row receives a bonus
+     (95/100), to favor consistency between consecutive rows and
+     reduce the Huffman coding cost of filter types. For the first
+     row the "previous" filter is None.
+   - Filter Up receives a bonus (90/100) when a previous row exists,
+     the PNG depth is 8 (indexed 8 bit, RGB or RGBA) and the sum of
+     the absolute byte differences from the previous row is below
+     four times the row size, a condition frequent in images
+     generated by X-VESA. For indexed images with fewer than 8 bits
+     per pixel the bonus is never applied.
+
+   The filter with the lowest score after corrections is selected for
+   that row (the lower filter number on equal scores); this is the
+   "Adaptive" candidate.
+
+   At the whole-image level, IFF2PNG does not commit to the Adaptive
+   candidate by default. It also builds the entire image filtered
+   uniformly with a single fixed filter:
+
+     Candidate 0   Adaptive (filter chosen per scanline)
+     Candidate 1   All-None
+     Candidate 2   All-Up
+     Candidate 3   All-Sub     (only if PNG depth is above 2 bits)
+     Candidate 4   All-Paeth   (only if PNG depth is above 2 bits)
+
+   With a 1 or 2 bit PNG depth only candidates 0, 1 and 2 exist; in
+   every other case, including true color and RGBA, all five are
+   tested. Candidates whose filtered bytes are identical to an
+   earlier candidate are detected and compressed only once: the
+   others receive a copy of its result. Every distinct candidate is
+   fully DEFLATE-compressed, and the candidate that yields the
+   smallest actual compressed output, not the smallest heuristic
+   score, is the one written to the PNG file (on equal sizes the
+   lower candidate number wins). With -v the log reports the
+   winning strategy and the number of scanlines using each filter.
+
+
+   3.8. DEFLATE compression
+
+   IFF2PNG implements a complete DEFLATE encoder without dependencies
+   on zlib or any other external compression library, offering two
+   interchangeable parsing engines selected by the -cx option (see
+   section 2.2). Both work on a 32 KiB window with matches of 3 to
+   258 bytes, searched with a hash of four bytes and hash chains.
+
+   - the two-pass lazy matcher (-c1..-c4):
+
+       Pass 1 is a greedy parse that uses a flat cost estimate (9 bits
+       per literal, 10 bits plus the distance extra bits per match)
+       only to count symbol frequencies; code lengths are built from
+       them.
+
+       Pass 2 parses the data again using those code lengths to
+       estimate the bit saving of each match. After finding a match at
+       the current position, it looks at the match at the next
+       position (one-step lazy evaluation); if the next match offers a
+       larger estimated saving, it emits a literal and advances one
+       position before emitting the best match instead. A match that
+       already reaches 258 bytes and could be extended is emitted
+       without the lazy comparison, so that long runs become
+       consecutive matches of 258 bytes.
+
+       The search depth is the maximum number of hash-chain entries
+       examined, set by -c1..-c4. After a match of 128 bytes or more,
+       16 extra steps are charged against the limit; with -c1 and -c2
+       the search also ends once a match of 32 bytes or more has been
+       found and more than a quarter of the limit has been used.
+       Positions inside a match longer than 16 bytes are indexed with a
+       stride of 3 (-c1) or 2 (-c2) instead of every position, to save
+       time.
+
+   - the Ultra parser (-cx):
+
+       A greedy pass gives the initial symbol frequencies. Then two
+       dynamic-programming passes follow. In each of them, for every
+       reachable position, the minimum cost of reaching it is
+       computed, with the code lengths of the previous pass as the
+       cost model (a symbol without a code is charged 11 bits for
+       literal/length and 7 bits for distance); at each position the
+       literal, and the matches of every length up to the longest
+       found, are relaxed. At the end the cheapest path is followed
+       backwards to produce the tokens, and the code lengths are
+       rebuilt from that path for the next pass.
+
+       The cost minimized is the sum of code lengths and extra bits.
+       Block headers, the run-length coding of the code lengths and
+       block splitting are not part of it. For each position, only
+       the lengths strictly longer than the best length already seen
+       while walking the chain are relaxed: a later candidate with a
+       shorter distance code but a length not greater than the best
+       is not considered, a deliberate heuristic since nearer
+       distances usually have no worse distance codes. The chain is
+       limited only by the search depth (no extra steps after long
+       matches, no early stop). In the DP passes every position is
+       indexed.
+
+       The matches found in the first DP pass depend only on the data,
+       not on the cost model, so they are recorded and replayed in the
+       second pass. If the record would exceed the cache limit (128
+       MiB on 64-bit builds, 16 MiB on 32-bit builds) the chains are
+       walked again; the output is the same either way.
+
+   Both engines feed the same downstream stage. Huffman table
+   construction uses the Package-Merge algorithm to build canonical,
+   length-limited prefix codes (maximum 15 bits for the literal/length
+   and distance alphabets, maximum 7 bits for the run-length-encoded
+   code-length alphabet, as required by RFC 1951). Every table built
+   is verified against the Kraft-McMillan equality before being used;
+   an internal inconsistency is treated as a fatal error rather than
+   emitted as a possibly undecodable stream.
+
+   Each block is written as the smaller of the dynamic Huffman
+   representation (BTYPE=10, with its header) and the fixed Huffman
+   representation (BTYPE=01), which wins on short or very regular
+   blocks.
+
+   If, after a full encoding pass, the resulting stream would be
+   larger than an equivalent stored (BTYPE=00, RFC 1951 section 3.2.4)
+   representation of the same data, IFF2PNG discards the compressed
+   stream and falls back to stored blocks of up to 65,535 bytes
+   instead, guaranteeing the compressor never expands its input by
+   more than the small, fixed stored-block framing overhead.
+
+   The produced stream is a complete zlib stream (CMF/FLG header +
+   DEFLATE data + Adler-32 checksum), directly usable as the content
+   of the PNG IDAT chunk. The whole image is written in a single IDAT
+   chunk.
+
+
+   3.9. Multi-block DEFLATE and adaptive splitting
+
+   IFF2PNG can encode the IDAT stream as more than one DEFLATE block,
+   instead of a single block. This targets images where different
+   regions have genuinely different statistical character -- a busy
+   title bar next to a flat status panel, for instance -- and where a
+   single shared Huffman table is a compromise that fits neither
+   region well.
+
+   The token stream produced by the DEFLATE parser is searched
+   recursively for beneficial split points, with these limits:
+
+   - at most 8 blocks in the final stream, and a recursion depth of at
+     most 3;
+   - a block is never shorter than 48 tokens, and a span shorter than
+     96 tokens is not split at all;
+   - within a span, IFF2PNG probes candidate split positions by
+     combining three sources: the points where the difference
+     between the literal/length histograms of two adjacent windows of
+     tokens is large and not decreasing (to catch abrupt local
+     shifts; at most 24 such points), an evenly spaced grid of 16
+     positions, and a hill-climbing refinement of the best candidate
+     found, trying offsets of up to 32 tokens on either side;
+   - for each candidate, the bit cost of encoding the two resulting
+     blocks separately (each with its own Huffman header) is computed
+     and compared with the cost of the single, unsplit span; a split
+     is accepted only if it saves more than 16 bits, and the two
+     halves are then themselves considered for further splitting,
+     within the limits above.
+
+   To keep the search fast, the token histograms are stored as
+   cumulative checkpoints, so that the cost of a range of tokens needs
+   only two table rows plus a small number of tokens, and the number
+   of candidate positions examined has little effect on the running
+   time. The counts are exact.
+
+   Because the accept/reject decision is made on the modelled bit cost
+   of the alternatives compared at that step, and not on a rough
+   estimate, a single decision cannot make the model's cost worse than
+   not splitting at that point. The search is however a heuristic,
+   and it does not look for a global optimum: whether the accumulated
+   effect of several decisions beats a single large block by a
+   meaningful margin, is neutral, or occasionally trails a
+   differently tuned strategy on some images, is a property of the
+   candidate search and of the specific image. Matches are produced
+   before the split, so a match may refer to data that lies in an
+   earlier block. -nbs is always available for comparison.
+
+   Block splitting is not performed by the fast pre-pass of -cx
+   pruning (section 2.5), and a candidate that is kept from that
+   pre-pass is therefore a single-block stream.
+
+
+   3.10. Multithreaded architecture
+
+   The filter candidates described in section 3.7 are compressed
+   independently rather than one after another. On Win32 and Win64,
+   IFF2PNG launches one thread per distinct candidate (at most five)
+   via _beginthreadex when compiled against a multithreaded C runtime,
+   or via CreateThread otherwise; on POSIX systems (Linux, macOS and
+   other Unix-like systems) the pthread API is used. On any other
+   platform, or when no supported threading API is available at
+   compile time, the same candidates are compressed sequentially, one
+   after another, on a single thread. The banner shows
+   "Multi-Thread" or "Single-Thread" accordingly. If a thread cannot
+   be created the conversion stops with an error.
+
+   Each candidate is compressed with its own private working memory
+   (hash chains, token buffer, Huffman workspace), so no candidate's
+   compression state is shared with another's; only a small number of
+   global items -- the memory-allocation calls, the progress
+   indicator and the deferred warnings -- are shared, and these are
+   protected by a mutex (a Win32 critical section or a POSIX mutex)
+   on every platform where threads are actually used. The final
+   selection is made only after all candidates have finished, by
+   comparing sizes in a fixed order. This design means that a
+   multithreaded run and an equivalent single-threaded run produce
+   the same PNG output: the number of threads used changes how fast
+   the conversion completes, never what it produces.
+
+   With -cx pruning (section 2.5) the candidates are compressed twice
+   in parallel: first all with the fast engine, then only the
+   surviving ones with the DP parser.
+
+
+   3.11. Memory usage and limits
+
+   IFF2PNG needs, besides the input file and the decoded image, one
+   DEFLATE workspace for each distinct filter candidate compressed at
+   the same time (up to five with threads, one in sequential builds).
+   Each workspace needs approximately 11 bytes for every byte of
+   filtered data (hash chain, token buffer, output buffer), about 23
+   bytes with -cx (cost and path tables), plus a fixed part of a few
+   hundred kilobytes, the histogram index of block splitting (a few
+   megabytes) and, with -cx, the match cache described in section 3.8.
+
+   Each workspace is limited to 2 GiB on 64-bit builds and to 512 MiB
+   on 32-bit builds. An image that would exceed the limit is rejected
+   with an error message (which suggests trying without -cx when -cx
+   was selected). The size arithmetic is checked: an image whose
+   buffers do not fit in 32 bits is reported as an error.
+
+   The maximum image size allowed by the IFF header is 65,535 x
+   65,535 pixels; the practical limit is the available memory.
+
+
+===========================================================================
+   4. SYSTEM REQUIREMENTS
+===========================================================================
+
+   - Windows 32 or 64 bit (XP or higher) for the Win32/Win64 version;
+     versions for Linux, macOS and other Unix-like systems can be
+     built from the same source, and the source also contains the
+     code paths for DOS targets (single-thread)
+   - No additional libraries required
+   - Memory sufficient to hold the entire input IFF file, the decoded
+     image and the processing buffers, including the working memory
+     for every filter candidate compressed in parallel (see 3.11).
+     For X-VESA screenshots the requirement is normally well under
+     32 MB with the default options; -cx needs roughly twice as much.
+
+
+===========================================================================
+   5. LICENSE
+===========================================================================
+
+   IFF2PNG is freeware. No fee is owed to the author for the use of
+   IFF2PNG. No modification or manipulation of the program is
+   permitted. This document is an integral part of the IFF2PNG
+   distribution and must always accompany the executable. The author
+   disclaims all liability for damages caused by the use of IFF2PNG.
+   Use of the program implies acceptance of this license.
+
+
+===========================================================================
+   6. WHERE TO FIND THE LATEST VERSION OF IFF2PNG
+===========================================================================
+
+   IFF2PNG is distributed as part of the X-VESA archive. The latest
+   version can be found at the same addresses indicated in the X-VESA
+   documentation:
+
+   https://github.com/marco-pistella/x-vesa
+
+
+===========================================================================
+   7. HOW TO CONTACT THE AUTHOR
+===========================================================================
+
+   The author can be contacted directly at: mpistella@libero.it
+
+   Reports of malfunctions and suggestions for future versions are
+   welcome. When reporting a problem with a particular file, please
+   attach the file and the log produced by the -v option.
+
+
+===========================================================================
+   8. NOTES
+===========================================================================
+
+   8.1. Differences from PBM2PNG V19.1
+
+   IFF2PNG replaces PBM2PNG. The command line of version 1.0 of the
+   family (IN OUT [-c1..-c4]) continues to work unchanged. The main
+   differences with PBM2PNG V19.1 are:
+
+   - Input: besides FORM PBM, IFF2PNG reads FORM ILBM (1 to 8 planes,
+     EHB, HAM6, HAM8, SHAM, CTBL, 24 planes, mask plane) and the CAMG
+     chunk. The program is no longer limited to X-VESA screenshots.
+
+   - Output: a mask plane produces an RGBA PNG; PBM2PNG had no such
+     case.
+
+   - Options: the new options are -ndedup, -fdedup, -nprune, -strict
+     and -v. The option -bs no longer exists (block splitting is the
+     default; -nbs remains) and is rejected as unknown.
+
+   - Parsing: three writer quirks are tolerated by default (section
+     2.6), and bytes after the end of the FORM are ignored. PBM2PNG
+     treated any trailing byte as a corrupt file; -strict restores
+     the strict behavior for the three quirks. A 24-bit PBM row is
+     rounded up to an even number of bytes, as an 8-bit row is.
+
+   - DEFLATE: lazy matching is one-step (not three-level); blocks may
+     be fixed-Huffman when shorter; block splitting is limited to 8
+     blocks, depth 3 and a 16-bit minimum gain, and is documented as a
+     heuristic; the -cx parser is a cost-model search with two DP
+     passes and a match cache and is not described as exhaustive.
+
+   - Filters: the fixed Sub and Paeth candidates are added when the
+     PNG depth is above 2 bits (PBM2PNG added them only in -cx mode).
+
+   - Palette: the PLTE chunk always holds exactly the colors in use
+     (ascending original order above 16 colors), and identical
+     colors can be merged (-ndedup, -fdedup).
+
+   - Console: the chosen filter and the number of blocks are no longer
+     printed on the command line; they are in the -v log.
+
+   - -cx pruning, which has no counterpart in PBM2PNG.
+
+
+   8.2. Changes in V20.7.x
+
+   V20.7.1:
+
+   - New: a warning when a SHAM chunk is found in a picture whose CAMG
+     declares neither HAM nor EHB; the picture is decoded as an
+     indexed picture with per-line palettes (section 3.4).
+
+   - Changed: every warning about SHAM and CTBL chunks (duplicate,
+     after BODY, trailing bytes, version, both present, short table)
+     is also kept in the -v log, in the "Per-line palette notes" line
+     of section [4], even when the chunk was applied.
+
+   - Changed: the "Palette table" line of the log now reads "N
+     palettes in chunk (covers M of H rows)".
+
+   - The conversion of every picture is unchanged.
+
+   V20.7.0:
+
+   - New: SHAM and CTBL chunks (Sliced HAM, Dynamic Hires, Dynamic
+     HAM): the palette changes on every scanline (section 3.4).
+
+   - New: a 6-plane ILBM with a SHAM chunk and no CAMG chunk is
+     decoded as HAM6, with a warning (section 3.3).
+
+   - New: the -v log shows the CAMG display flags (HIRES, LACE) in
+     section [2] and the per-line palette lines in section [4].
+
+   - Fixed: the -v log now reports the 24-to-8 reduction also for HAM
+     pictures that were reduced to an indexed palette.
+
+   - Pictures without SHAM and CTBL chunks are decoded and encoded
+     as before.
+
+
+   8.3. General notes
+
+   IFF2PNG was developed as a support tool for X-VESA. The IFF-PBM
+   format chosen by X-VESA for its screenshots is optimal for
+   generation in pure assembly language -- simple structure, no library
+   dependencies, ByteRun1 compression implementable in a few dozen
+   instructions -- but is not directly readable by virtually any
+   graphics tool currently in use on PC. IFF2PNG solves this problem by
+   producing standard PNG files with optimized compression, and extends
+   the same service to the planar IFF-ILBM images of the Amiga,
+   including the HAM, EHB, Sliced HAM and Dynamic Hires modes.
+
+   The IFF2PNG DEFLATE encoder was written entirely from scratch in
+   C89, without making use of zlib or any other compression library.
+   This choice is motivated by the distribution context: IFF2PNG
+   must be a self-contained and portable executable, free of external
+   dependencies.
+
+   Between version 1.0 and version 20.7.1 the converter grew from a
+   single-block, single-threaded DEFLATE implementation for PBM files
+   into a multithreaded compressor offering two interchangeable parsing
+   strategies, whole-image filter competition decided by real
+   compressed size, adaptive multi-block partitioning of the DEFLATE
+   stream itself, palette de-duplication decided by measurement and a
+   decoder for the planar Amiga formats, including the per-line
+   palettes of Sliced HAM and Dynamic Hires -- while the command-line
+   contract of version 1.0 continues to work unchanged, with every new
+   feature reachable through additional, optional switches.
+
+   For the typical images produced by X-VESA -- screens with reduced
+   palettes, text graphics and bars -- IFF2PNG produces PNG files
+   significantly smaller than generic converters, thanks to palette
+   compaction and ordering, whole-image filter competition and, when
+   requested, the -cx parsing engine.
+
+
+                                                          Marco Pistella
+                                                     mpistella@libero.it

@@ -1,4 +1,4 @@
-X-VESA 2.0 Public RC1
+X-VESA 2.0.1
 Advanced VESA BIOS diagnostic tool.
 Enumerates and tests all VESA modes.
 Includes VRAM, timing and DAC checks.

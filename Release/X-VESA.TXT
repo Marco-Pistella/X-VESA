@@ -1,4 +1,4 @@
-                            X-VESA V2.0.0
+                            X-VESA V2.0.1
                           by Marco Pistella
                          mpistella@libero.it
 
@@ -1148,7 +1148,7 @@
    - MS-DOS version 5.0 or higher
    - Intel 80386 processor or higher
      80386 CPUs affected by the MUL bug are not supported
-   - 302,048 bytes of free conventional memory
+   - 302,416 bytes of free conventional memory
    - VESA 1.0 or higher compatible graphics card
 
    X-VESA is designed for use on real hardware. Operation on
@@ -1203,8 +1203,8 @@
 
    X-VESA.COM   - Executable
    X-VESA.TXT   - This document
-   PBM2PNG.EXE  - Converter from IFF-PBM format to PNG
-   PBM2PNG.TXT  - PBM2PNG documentation
+   IFF2PNG.EXE  - Converter from IFF format to PNG
+   IFF2PNG.TXT  - IFF2PNG documentation
    IPEREDID.COM - DOS TSR for managing multiple monitor EDIDs
    IPEREDID.TXT - IPEREDID documentation
    FILE_ID.DIZ  - Brief description

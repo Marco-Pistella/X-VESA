@@ -1,0 +1,4 @@
+2.0.1 - Slight improvement to the IFF compression routine
+        Fix FORM size and IFF_PAD value for IFF files
+        IFF save: improved VGA palette expansion to 8-bit (more accurate colors)
+        New IFF2PNG converter V20.7.1
